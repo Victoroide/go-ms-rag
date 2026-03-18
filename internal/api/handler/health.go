@@ -11,6 +11,7 @@ import (
 
 	"github.com/Victoroide/go-ms-rag/internal/domain"
 	"github.com/Victoroide/go-ms-rag/internal/llm"
+	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
 )
 
 // HealthStatus represents the health check response body.
@@ -18,15 +19,17 @@ type HealthStatus struct {
 	Status   string `json:"status"`
 	Pinecone string `json:"pinecone"`
 	Neon     string `json:"neon"`
+	S3       string `json:"s3"`
 }
 
 // HealthHandler returns an HTTP handler for GET /health.
-func HealthHandler(vs domain.VectorStore, cs domain.ChunkStore, amb *llm.Ambassador) http.HandlerFunc {
+func HealthHandler(vs domain.VectorStore, cs domain.ChunkStore, amb *llm.Ambassador, s3Client *s3store.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status := HealthStatus{
 			Status:   "ok",
 			Pinecone: "ok",
 			Neon:     "ok",
+			S3:       "ok",
 		}
 		healthy := true
 
@@ -44,6 +47,16 @@ func HealthHandler(vs domain.VectorStore, cs domain.ChunkStore, amb *llm.Ambassa
 			log.Printf("health: neon probe failed: %v", err)
 			status.Neon = "unreachable"
 			healthy = false
+		}
+
+		if s3Client != nil {
+			s3Ctx, s3Cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer s3Cancel()
+			if err := s3Client.Ping(s3Ctx); err != nil {
+				log.Printf("health: s3 probe failed: %v", err)
+				status.S3 = "unreachable"
+				healthy = false
+			}
 		}
 
 		if !healthy {

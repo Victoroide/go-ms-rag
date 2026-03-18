@@ -10,6 +10,7 @@ import (
 	"github.com/Victoroide/go-ms-rag/internal/domain"
 	"github.com/Victoroide/go-ms-rag/internal/llm"
 	"github.com/Victoroide/go-ms-rag/internal/retriever"
+	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
 	"github.com/Victoroide/go-ms-rag/internal/worker"
 )
 
@@ -21,14 +22,16 @@ type RouterDeps struct {
 	Ambassador  *llm.Ambassador
 	Config      *config.Config
 	Worker      *worker.Worker
+	S3Client    *s3store.Client
 }
 
 // NewRouter wires all HTTP routes, handlers, and middleware.
 func NewRouter(deps *RouterDeps) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", handler.HealthHandler(deps.VectorStore, deps.ChunkStore, deps.Ambassador))
-	mux.HandleFunc("POST /ingest", handler.IngestHandler(deps.Worker, deps.ChunkStore))
+	mux.HandleFunc("GET /health", handler.HealthHandler(deps.VectorStore, deps.ChunkStore, deps.Ambassador, deps.S3Client))
+	mux.HandleFunc("POST /ingest", handler.IngestHandler(deps.Worker, deps.ChunkStore, deps.S3Client, deps.Config.MaxUploadBytes))
 	mux.HandleFunc("POST /query", handler.QueryHandler(deps.Retriever, deps.Ambassador, deps.Config))
+	mux.HandleFunc("GET /documents/{doc_id}/file", handler.FileHandler(deps.ChunkStore, deps.S3Client))
 	var h http.Handler = mux
 	h = middleware.Logging(h)
 	h = middleware.Recovery(h)
