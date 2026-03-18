@@ -1,0 +1,42 @@
+package pinecone
+
+import (
+	"context"
+
+	"github.com/Victoroide/go-ms-rag/internal/domain"
+)
+
+// Driver implements the domain.VectorStore interface using Pinecone.
+type Driver struct {
+	client *PineconeClient
+}
+
+// NewDriver creates a VectorStore backed by Pinecone.
+func NewDriver(ctx context.Context, client *PineconeClient) *Driver {
+	return &Driver{client: client}
+}
+
+// Upsert inserts or updates vectors in the specified namespace.
+func (d *Driver) Upsert(ctx context.Context, namespace string, chunks []domain.Chunk) error {
+	return d.client.Upsert(ctx, namespace, chunks)
+}
+
+// Query searches for similar vectors in the specified namespace.
+func (d *Driver) Query(ctx context.Context, namespace string, embedding []float32, topK int) ([]domain.ScoredChunk, error) {
+	return d.client.Query(ctx, namespace, embedding, topK)
+}
+
+// QueryAllNamespaces queries across all namespaces.
+func (d *Driver) QueryAllNamespaces(ctx context.Context, embedding []float32, topK int) ([]domain.ScoredChunk, error) {
+	return d.client.QueryAllNamespaces(ctx, embedding, topK)
+}
+
+// Delete removes vectors by ID from the specified namespace.
+func (d *Driver) Delete(ctx context.Context, namespace string, ids []string) error {
+	return d.client.Delete(ctx, namespace, ids)
+}
+
+// Ping verifies connectivity to the Pinecone index.
+func (d *Driver) Ping(ctx context.Context) error {
+	return d.client.Ping(ctx)
+}
