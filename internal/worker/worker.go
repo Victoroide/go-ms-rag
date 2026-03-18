@@ -17,6 +17,9 @@ type IngestTask struct {
 	DocumentID domain.DocumentID
 	Content    string
 	Metadata   map[string]any
+	FileName   *string
+	FileType   *string
+	S3Key      *string
 }
 
 // Worker processes ingest tasks from a buffered channel queue.
@@ -90,6 +93,9 @@ func (w *Worker) processTask(ctx context.Context, task IngestTask) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("worker: panic processing document %s: %v", task.DocumentID, r)
+			if err := w.cs.UpdateDocumentStatus(ctx, task.DocumentID, "failed"); err != nil {
+				log.Printf("worker: update status after panic for %s: %v", task.DocumentID, err)
+			}
 		}
 	}()
 
@@ -105,11 +111,20 @@ func (w *Worker) processTask(ctx context.Context, task IngestTask) {
 	}
 
 	ic := pipeline.NewIngestContext(task.DocumentID, task.Content, task.Metadata)
+	ic.FileName = task.FileName
+	ic.FileType = task.FileType
+	ic.S3Key = task.S3Key
 	_, err = pipeline.RunIngestionPipeline(ctx, ic, w.stages)
 	if err != nil {
 		log.Printf("worker: ingest failed for document %s: %v", task.DocumentID, err)
+		if statusErr := w.cs.UpdateDocumentStatus(ctx, task.DocumentID, "failed"); statusErr != nil {
+			log.Printf("worker: update status to failed for %s: %v", task.DocumentID, statusErr)
+		}
 		return
 	}
 
+	if statusErr := w.cs.UpdateDocumentStatus(ctx, task.DocumentID, "completed"); statusErr != nil {
+		log.Printf("worker: update status to completed for %s: %v", task.DocumentID, statusErr)
+	}
 	log.Printf("worker: document %s ingested in %s", task.DocumentID, time.Since(start))
 }

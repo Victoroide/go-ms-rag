@@ -36,6 +36,9 @@ type IngestContext struct {
 	RawText    string
 	Chunks     []domain.Chunk
 	Metadata   map[string]any
+	FileName   *string
+	FileType   *string
+	S3Key      *string
 }
 
 // NewIngestContext creates an initialized IngestContext.
@@ -54,6 +57,9 @@ type QueryContext struct {
 	SubQueries    []string
 	MaxChunks     int
 	RequestedMode string
+
+	// Populated by decomposition stage.
+	NamedEntity string
 
 	// Populated by routing stage.
 	RetrievalMode  string

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 
 	"github.com/Victoroide/go-ms-rag/internal/domain"
 )
@@ -123,11 +124,46 @@ func (r *Retriever) Retrieve(ctx context.Context, query string, mode RetrievalMo
 // and embedding similarity score.
 //
 // LOCAL mode criteria:
-//   - One or fewer sub-queries AND similarity >= threshold
+//   - One or fewer sub-queries AND similarity >= threshold AND not a multi-entity query
 //
 // GLOBAL mode criteria:
-//   - Two or more sub-queries OR similarity < threshold
+//   - Two or more sub-queries OR similarity < threshold OR multi-entity query
 func (r *Retriever) DetermineMode(subQueryCount int, topScore float64) RetrievalMode {
+	if subQueryCount <= 1 && topScore >= r.threshold {
+		return RetrievalModeLocal
+	}
+	return RetrievalModeGlobal
+}
+
+// DetermineModeWithQuery decides LOCAL or GLOBAL mode with query text analysis.
+func (r *Retriever) DetermineModeWithQuery(query string, subQueryCount int, topScore float64, namedEntity string) RetrievalMode {
+	queryLower := strings.ToLower(query)
+
+	// Mode decision — named entity wins over everything
+	if namedEntity != "" {
+		// named entity overrides sub-query count and multi-entity keywords
+		// and doesn't need to meet the threshold
+		return RetrievalModeLocal
+	}
+
+	// Force GLOBAL for multi-entity queries (only if no named entity)
+	multiEntityKeywords := []string{
+		"which candidates",
+		"all candidates",
+		"match candidates",
+		"find candidates",
+		"list candidates",
+		"suitable for",
+		"best candidate for",
+	}
+
+	for _, keyword := range multiEntityKeywords {
+		if strings.Contains(queryLower, keyword) {
+			return RetrievalModeGlobal
+		}
+	}
+
+	// Standard routing logic
 	if subQueryCount <= 1 && topScore >= r.threshold {
 		return RetrievalModeLocal
 	}

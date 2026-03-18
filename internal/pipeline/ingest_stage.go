@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/Victoroide/go-ms-rag/internal/chunker"
 	"github.com/Victoroide/go-ms-rag/internal/domain"
@@ -73,41 +74,73 @@ func NewPersistStage(vs domain.VectorStore, cs domain.ChunkStore) *PersistStage 
 // ID returns the stage identifier.
 func (s *PersistStage) ID() StageID { return StagePersist }
 
+// detectDocType determines whether a document is a job posting or a candidate profile.
+func detectDocType(content string) string {
+	if strings.Contains(strings.ToLower(content), "job opening:") {
+		return "job"
+	}
+	return "candidate"
+}
+
 // Run persists chunks to both Pinecone and Postgres.
+// Order: 1) Upsert vectors to Pinecone, 2) Save metadata to Postgres.
 func (s *PersistStage) Run(ctx context.Context, ic *IngestContext) error {
-	// Store fingerprint.
-	fp := chunker.Fingerprint(ic.RawText)
-	if err := s.chunkStore.StoreFingerprint(ctx, fp, string(ic.DocumentID)); err != nil {
-		log.Printf("persist_stage: store fingerprint: %v", err)
+	// Detect doc_type and inject into metadata for all chunks.
+	docType := detectDocType(ic.RawText)
+	if ic.Metadata == nil {
+		ic.Metadata = make(map[string]any)
+	}
+	ic.Metadata["doc_type"] = docType
+
+	// Inject doc_type into each chunk's metadata for Pinecone.
+	for i := range ic.Chunks {
+		if ic.Chunks[i].Metadata == nil {
+			ic.Chunks[i].Metadata = make(map[string]any)
+		}
+		ic.Chunks[i].Metadata["doc_type"] = docType
 	}
 
-	// Insert document record.
+	// 1. Upsert vectors to Pinecone (namespace = doc_id).
+	namespace := string(ic.DocumentID)
+	if err := s.vectorStore.Upsert(ctx, namespace, ic.Chunks); err != nil {
+		return fmt.Errorf("persist_stage: upsert to pinecone namespace %q: %w", namespace, err)
+	}
+
+	// 2. Also upsert to default namespace for global queries.
+	if err := s.vectorStore.Upsert(ctx, "", ic.Chunks); err != nil {
+		return fmt.Errorf("persist_stage: upsert to default namespace: %w", err)
+	}
+
+	// 3. Insert document record.
+	preview := ic.RawText
+	if len(preview) > 60 {
+		preview = preview[:60]
+	}
 	doc := domain.Document{
-		ID:         ic.DocumentID,
-		Content:    ic.RawText,
-		Metadata:   ic.Metadata,
-		ChunkCount: len(ic.Chunks),
+		ID:             ic.DocumentID,
+		Content:        ic.RawText,
+		ContentPreview: preview,
+		Metadata:       ic.Metadata,
+		ChunkCount:     len(ic.Chunks),
+		FileName:       ic.FileName,
+		FileType:       ic.FileType,
+		S3Key:          ic.S3Key,
 	}
 	if err := s.chunkStore.InsertDocument(ctx, doc); err != nil {
 		return fmt.Errorf("persist_stage: insert document: %w", err)
 	}
 
-	// Insert chunk metadata to Postgres.
+	// 4. Insert chunk metadata to Postgres.
 	if err := s.chunkStore.InsertChunks(ctx, ic.Chunks); err != nil {
 		return fmt.Errorf("persist_stage: insert chunks: %w", err)
 	}
 
-	// Upsert vectors to Pinecone (namespace = doc_id).
-	namespace := string(ic.DocumentID)
-	if err := s.vectorStore.Upsert(ctx, namespace, ic.Chunks); err != nil {
-		return fmt.Errorf("persist_stage: upsert to pinecone: %w", err)
+	// 5. Store fingerprint (after document exists for FK constraint).
+	fp := chunker.Fingerprint(ic.RawText)
+	if err := s.chunkStore.StoreFingerprint(ctx, fp, string(ic.DocumentID)); err != nil {
+		log.Printf("persist_stage: store fingerprint: %v", err)
 	}
 
-	// Also upsert to default namespace for global queries.
-	if err := s.vectorStore.Upsert(ctx, "", ic.Chunks); err != nil {
-		return fmt.Errorf("persist_stage: upsert to default namespace: %w", err)
-	}
-
-	log.Printf("persist_stage: document=%s chunks=%d persisted", ic.DocumentID, len(ic.Chunks))
+	log.Printf("persist_stage: document=%s doc_type=%s chunks=%d persisted", ic.DocumentID, docType, len(ic.Chunks))
 	return nil
 }

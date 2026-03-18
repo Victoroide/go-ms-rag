@@ -36,8 +36,59 @@ func (s *DecomposeStage) ID() StageID { return StageQueryDecomposition }
 
 // Run decomposes the original query into sub-queries.
 func (s *DecomposeStage) Run(ctx context.Context, qc *QueryContext) error {
-	prompt := fmt.Sprintf(`You are a query decomposition engine. Break the following query into independent sub-queries that can each be answered separately. Return valid JSON: {"sub_queries": ["q1", "q2", ...]}.
-If the query is simple and needs no decomposition, return it as the single sub-query.
+	// Check for named entities FIRST - skip LLM decomposition for queries about specific people/documents
+	queryLower := strings.ToLower(qc.OriginalQuery)
+
+	// Check if this is a multi-candidate query first
+	multiEntityKeywords := []string{
+		"which candidates",
+		"all candidates",
+		"match candidates",
+		"find candidates",
+		"list candidates",
+		"suitable for",
+		"best candidate for",
+	}
+	isMultiEntity := false
+	for _, keyword := range multiEntityKeywords {
+		if strings.Contains(queryLower, keyword) {
+			isMultiEntity = true
+			break
+		}
+	}
+
+	// Only detect named entities if not a multi-entity query
+	if !isMultiEntity {
+		// Fetch named entities dynamically from database
+		namedEntities, err := FetchNamedEntitiesFromDB(ctx, s.cfg)
+		if err != nil {
+			log.Printf("WARNING: failed to fetch named entities: %v", err)
+			// Continue with LLM decomposition if we can't fetch entities
+		} else {
+			// Check if query contains any named entity
+			for entity := range namedEntities {
+				if strings.Contains(queryLower, entity) {
+					// This is a query about a specific entity, skip decomposition
+					qc.SubQueries = []string{qc.OriginalQuery}
+					qc.NamedEntity = entity
+					log.Printf("decompose_stage: query=%q sub_queries=%d (skipped decomposition for named entity: %s)", qc.OriginalQuery, len(qc.SubQueries), entity)
+					return nil
+				}
+			}
+		}
+	}
+
+	prompt := fmt.Sprintf(`You are a query decomposition engine. Analyze the following query and determine if it needs to be broken down.
+
+ONLY decompose if the query asks multiple distinct questions or requires aggregating information across multiple entities.
+DO NOT decompose queries about a single person, document, or entity - keep them as one sub-query.
+
+Examples:
+- "What are Laura's skills?" → {"sub_queries": ["What are Laura's skills?"]} (single entity, no decomposition)
+- "Tell me about the NVision-X role" → {"sub_queries": ["Tell me about the NVision-X role"]} (single entity, no decomposition)
+- "Which candidates have Python AND AWS experience?" → {"sub_queries": ["Which candidates have Python experience?", "Which candidates have AWS experience?"]} (multi-entity comparison, decompose)
+
+Return valid JSON: {"sub_queries": ["q1", "q2", ...]}.
 
 Query: %s`, qc.OriginalQuery)
 
@@ -84,9 +135,9 @@ Query: %s`, qc.OriginalQuery)
 	cleaned = strings.TrimSpace(cleaned)
 
 	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
-		qc.SubQueries = []string{qc.OriginalQuery}
-		return nil
+		return fmt.Errorf("query_decomposition: parse JSON: %w", err)
 	}
+
 	if len(parsed.SubQueries) == 0 {
 		qc.SubQueries = []string{qc.OriginalQuery}
 		return nil
@@ -126,9 +177,9 @@ func (s *RoutingStage) Run(ctx context.Context, qc *QueryContext) error {
 		return nil
 	}
 
-	mode := s.ret.DetermineMode(len(qc.SubQueries), topScore)
+	mode := s.ret.DetermineModeWithQuery(qc.OriginalQuery, len(qc.SubQueries), topScore, qc.NamedEntity)
 	qc.RetrievalMode = string(mode)
-	log.Printf("retrieval: mode=%s sub_queries=%d similarity=%.4f", qc.RetrievalMode, len(qc.SubQueries), topScore)
+	log.Printf("retrieval: mode=%s sub_queries=%d similarity=%.4f named_entity=%s", qc.RetrievalMode, len(qc.SubQueries), topScore, qc.NamedEntity)
 	return nil
 }
 
