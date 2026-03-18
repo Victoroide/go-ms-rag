@@ -1,0 +1,4 @@
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS file_name TEXT,
+    ADD COLUMN IF NOT EXISTS file_type TEXT,
+    ADD COLUMN IF NOT EXISTS s3_key    TEXT;

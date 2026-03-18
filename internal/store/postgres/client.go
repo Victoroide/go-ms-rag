@@ -17,6 +17,12 @@ import (
 //go:embed migrations/001_init.sql
 var migrationSQL string
 
+//go:embed migrations/002_add_file_storage.sql
+var migration002SQL string
+
+//go:embed migrations/003_add_content_preview.sql
+var migration003SQL string
+
 // Client manages the PostgreSQL connection pool and provides
 // chunk metadata and document fingerprint operations.
 type Client struct {
@@ -47,7 +53,13 @@ func (c *Client) RunMigrations(ctx context.Context) error {
 }
 
 func (c *Client) runMigrations(ctx context.Context) error {
-	_, err := c.Pool.Exec(ctx, migrationSQL)
+	if _, err := c.Pool.Exec(ctx, migrationSQL); err != nil {
+		return err
+	}
+	if _, err := c.Pool.Exec(ctx, migration002SQL); err != nil {
+		return err
+	}
+	_, err := c.Pool.Exec(ctx, migration003SQL)
 	return err
 }
 
@@ -58,10 +70,10 @@ func (c *Client) InsertDocument(ctx context.Context, doc domain.Document) error 
 		metadataJSON = []byte("{}")
 	}
 	_, err = c.Pool.Exec(ctx,
-		`INSERT INTO documents (id, content, metadata, chunk_count)
-		 VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (id) DO UPDATE SET content = $2, metadata = $3, chunk_count = $4`,
-		string(doc.ID), doc.Content, metadataJSON, doc.ChunkCount,
+		`INSERT INTO documents (id, content, content_preview, metadata, chunk_count, file_name, file_type, s3_key)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		 ON CONFLICT (id) DO UPDATE SET content = $2, content_preview = $3, metadata = $4, chunk_count = $5, file_name = $6, file_type = $7, s3_key = $8`,
+		string(doc.ID), doc.Content, doc.ContentPreview, metadataJSON, doc.ChunkCount, doc.FileName, doc.FileType, doc.S3Key,
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: insert document %s: %w", doc.ID, err)
@@ -85,6 +97,18 @@ func (c *Client) InsertChunks(ctx context.Context, chunks []domain.Chunk) error 
 	return nil
 }
 
+// UpdateDocumentStatus sets the status of a document (e.g. "completed", "failed").
+func (c *Client) UpdateDocumentStatus(ctx context.Context, id domain.DocumentID, status string) error {
+	_, err := c.Pool.Exec(ctx,
+		`UPDATE documents SET status = $1 WHERE id = $2`,
+		status, string(id),
+	)
+	if err != nil {
+		return fmt.Errorf("postgres: update document status %s: %w", id, err)
+	}
+	return nil
+}
+
 // GetDocument retrieves a document by ID.
 func (c *Client) GetDocument(ctx context.Context, id domain.DocumentID) (*domain.Document, error) {
 	var doc domain.Document
@@ -102,6 +126,22 @@ func (c *Client) GetDocument(ctx context.Context, id domain.DocumentID) (*domain
 		_ = json.Unmarshal(metadataJSON, &doc.Metadata)
 	}
 	return &doc, nil
+}
+
+// GetDocumentS3Key retrieves the s3_key for a document. Returns nil if no file is stored.
+func (c *Client) GetDocumentS3Key(ctx context.Context, id domain.DocumentID) (*string, error) {
+	var s3Key *string
+	err := c.Pool.QueryRow(ctx,
+		`SELECT s3_key FROM documents WHERE id = $1`,
+		string(id),
+	).Scan(&s3Key)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("postgres: get document s3 key %s: %w", id, err)
+	}
+	return s3Key, nil
 }
 
 // CheckFingerprint checks whether a document fingerprint already exists.
