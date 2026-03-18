@@ -35,6 +35,9 @@ type Config struct {
 	ChunkOverlap   int
 
 	EmbeddingDimensions int
+
+	S3Bucket       string
+	MaxUploadBytes int64
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -58,7 +61,9 @@ func Load() (*Config, error) {
 		MaxChunksPerQuery:       envIntOrDefault("MAX_CHUNKS_PER_QUERY", 10),
 		ChunkTokenSize:          envIntOrDefault("CHUNK_TOKEN_SIZE", 512),
 		ChunkOverlap:            envIntOrDefault("CHUNK_OVERLAP", 64),
-		EmbeddingDimensions:     envIntOrDefault("EMBEDDING_DIMENSIONS", 512),
+		EmbeddingDimensions:     envIntOrDefault("EMBEDDING_DIMENSIONS", 1024),
+		S3Bucket:                envOrDefault("S3_BUCKET", "ms-go-rag"),
+		MaxUploadBytes:          envInt64OrDefault("MAX_UPLOAD_BYTES", 20971520),
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -109,6 +114,18 @@ func envIntOrDefault(key string, fallback int) int {
 		return fallback
 	}
 	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func envInt64OrDefault(key string, fallback int64) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
 		return fallback
 	}
