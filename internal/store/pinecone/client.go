@@ -75,12 +75,19 @@ func (p *PineconeClient) Upsert(ctx context.Context, namespace string, chunks []
 		if len(c.Embedding) == 0 {
 			continue
 		}
-		md, err := structpb.NewStruct(map[string]any{
+		// Build metadata with doc_type if available.
+		mdMap := map[string]any{
 			"doc_id":      string(c.DocumentID),
 			"chunk_index": float64(c.Index),
 			"text":        c.Text,
 			"token_count": float64(c.TokenCount),
-		})
+		}
+		if c.Metadata != nil {
+			if docType, ok := c.Metadata["doc_type"]; ok {
+				mdMap["doc_type"] = docType
+			}
+		}
+		md, err := structpb.NewStruct(mdMap)
 		if err != nil {
 			return fmt.Errorf("pinecone: build metadata for chunk %s: %w", c.ID, err)
 		}
@@ -159,6 +166,43 @@ func (p *PineconeClient) Delete(ctx context.Context, namespace string, ids []str
 	if err != nil {
 		return fmt.Errorf("pinecone: delete %d vectors from namespace %q: %w", len(ids), namespace, err)
 	}
+	return nil
+}
+
+// DeleteAllVectorsInNamespace deletes all vectors from the specified namespace.
+func (p *PineconeClient) DeleteAllVectorsInNamespace(ctx context.Context, namespace string) error {
+	idxConn, err := p.conn(namespace)
+	if err != nil {
+		return err
+	}
+
+	// First, query to get all vector IDs in the namespace
+	res, err := idxConn.QueryByVectorValues(ctx, &pinecone.QueryByVectorValuesRequest{
+		TopK:            10000, // Fetch up to 10k vectors
+		IncludeValues:   false,
+		IncludeMetadata: false,
+	})
+	if err != nil {
+		return fmt.Errorf("pinecone: query vectors in namespace %q: %w", namespace, err)
+	}
+
+	// If no vectors found, we're done
+	if len(res.Matches) == 0 {
+		return nil
+	}
+
+	// Collect all vector IDs
+	var ids []string
+	for _, match := range res.Matches {
+		ids = append(ids, match.Vector.Id)
+	}
+
+	// Delete all vectors by ID
+	err = idxConn.DeleteVectorsById(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("pinecone: delete %d vectors from namespace %q: %w", len(ids), namespace, err)
+	}
+
 	return nil
 }
 

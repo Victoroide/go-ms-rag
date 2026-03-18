@@ -36,6 +36,11 @@ func (d *Driver) Delete(ctx context.Context, namespace string, ids []string) err
 	return d.client.Delete(ctx, namespace, ids)
 }
 
+// DeleteAllVectorsInNamespace deletes all vectors from the specified namespace.
+func (d *Driver) DeleteAllVectorsInNamespace(ctx context.Context, namespace string) error {
+	return d.client.DeleteAllVectorsInNamespace(ctx, namespace)
+}
+
 // Ping verifies connectivity to the Pinecone index.
 func (d *Driver) Ping(ctx context.Context) error {
 	return d.client.Ping(ctx)
