@@ -23,6 +23,7 @@ import (
 	"github.com/Victoroide/go-ms-rag/internal/retriever"
 	pcstore "github.com/Victoroide/go-ms-rag/internal/store/pinecone"
 	pgstore "github.com/Victoroide/go-ms-rag/internal/store/postgres"
+	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
 	"github.com/Victoroide/go-ms-rag/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
@@ -88,6 +89,17 @@ func run() error {
 	// Initialize retriever.
 	ret := retriever.NewRetriever(pcDriver, emb, cfg.LocalRetrievalThreshold, cfg.MaxChunksPerQuery)
 
+	// Initialize S3 client (non-fatal if it fails).
+	var s3Client *s3store.Client
+	if cfg.S3Bucket != "" {
+		s3c, s3Err := s3store.New(ctx, cfg)
+		if s3Err != nil {
+			log.Printf("WARNING: s3 init failed (file uploads disabled): %v", s3Err)
+		} else {
+			s3Client = s3c
+		}
+	}
+
 	// Build ingestion pipeline stages.
 	ingestStages := []pipeline.Stage{
 		pipeline.NewChunkStage(chk),
@@ -107,6 +119,7 @@ func run() error {
 		Ambassador:  amb,
 		Config:      cfg,
 		Worker:      w,
+		S3Client:    s3Client,
 	})
 
 	srv := &http.Server{
