@@ -1,0 +1,18 @@
+version: "3.9"
+services:
+  test:
+    build:
+      context: .
+      target: test
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - AWS_REGION=us-east-1
+      - PINECONE_INDEX_NAME=go-ms-rag
+      - BEDROCK_EMBED_DIMENSIONS=1024
+      - LOCAL_RETRIEVAL_THRESHOLD=0.70
+      - MIN_GLOBAL_CHUNKS=3
+      - MAX_CHUNKS_PER_QUERY=10
+      - WORKER_QUEUE_SIZE=100
+      - EMBED_CONCURRENCY=10
+    restart: "no"
