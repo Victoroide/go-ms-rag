@@ -36,59 +36,38 @@ func (s *DecomposeStage) ID() StageID { return StageQueryDecomposition }
 
 // Run decomposes the original query into sub-queries.
 func (s *DecomposeStage) Run(ctx context.Context, qc *QueryContext) error {
-	// Check for named entities FIRST - skip LLM decomposition for queries about specific people/documents
 	queryLower := strings.ToLower(qc.OriginalQuery)
 
-	// Check if this is a multi-candidate query first
-	multiEntityKeywords := []string{
-		"which candidates",
-		"all candidates",
-		"match candidates",
-		"find candidates",
-		"list candidates",
-		"suitable for",
-		"best candidate for",
-	}
-	isMultiEntity := false
-	for _, keyword := range multiEntityKeywords {
-		if strings.Contains(queryLower, keyword) {
-			isMultiEntity = true
-			break
-		}
-	}
-
-	// Only detect named entities if not a multi-entity query
-	if !isMultiEntity {
-		// Fetch named entities dynamically from database
-		namedEntities, err := FetchNamedEntitiesFromDB(ctx, s.cfg)
-		if err != nil {
-			log.Printf("WARNING: failed to fetch named entities: %v", err)
-			// Continue with LLM decomposition if we can't fetch entities
-		} else {
-			// Check if query contains any named entity
-			for entity := range namedEntities {
-				if strings.Contains(queryLower, entity) {
-					// This is a query about a specific entity, skip decomposition
-					qc.SubQueries = []string{qc.OriginalQuery}
-					qc.NamedEntity = entity
-					log.Printf("decompose_stage: query=%q sub_queries=%d (skipped decomposition for named entity: %s)", qc.OriginalQuery, len(qc.SubQueries), entity)
-					return nil
-				}
+	// Check if query mentions a known named entity from DB.
+	// We record the entity but always let the LLM decompose — the LLM
+	// is authoritative for deciding single-entity vs multi-entity queries.
+	namedEntities, err := FetchNamedEntitiesFromDB(ctx, s.cfg)
+	if err != nil {
+		log.Printf("WARNING: failed to fetch named entities: %v", err)
+	} else {
+		for entity := range namedEntities {
+			if strings.Contains(queryLower, entity) {
+				qc.NamedEntity = entity
+				break
 			}
 		}
 	}
 
-	prompt := fmt.Sprintf(`You are a query decomposition engine. Analyze the following query and determine if it needs to be broken down.
+	prompt := fmt.Sprintf(`You are a query decomposition engine. Decide whether to keep a query as-is or split it into sub-queries.
 
-ONLY decompose if the query asks multiple distinct questions or requires aggregating information across multiple entities.
-DO NOT decompose queries about a single person, document, or entity - keep them as one sub-query.
+Rules:
+1. If the query asks about ONE specific person, role, or document → keep as one sub-query.
+2. If the query asks to compare, match, or evaluate MULTIPLE entities → split into sub-queries.
+3. Queries that ask "which candidates fit X" or "match candidates to X" require retrieving BOTH the role AND all candidates → always split.
 
 Examples:
-- "What are Laura's skills?" → {"sub_queries": ["What are Laura's skills?"]} (single entity, no decomposition)
-- "Tell me about the NVision-X role" → {"sub_queries": ["Tell me about the NVision-X role"]} (single entity, no decomposition)
-- "Which candidates have Python AND AWS experience?" → {"sub_queries": ["Which candidates have Python experience?", "Which candidates have AWS experience?"]} (multi-entity comparison, decompose)
+- "What are Laura's skills?" → {"sub_queries": ["What are Laura's skills?"]}
+- "Tell me about the Senior Backend Engineer role" → {"sub_queries": ["Tell me about the Senior Backend Engineer role"]}
+- "Which candidates have Python AND AWS experience?" → {"sub_queries": ["Which candidates have Python experience?", "Which candidates have AWS experience?"]}
+- "Which candidates are suitable for the DataFlow position?" → {"sub_queries": ["What are the requirements for the DataFlow position?", "Which candidates match those requirements?"]}
+- "Match candidates to the backend role" → {"sub_queries": ["What does the backend role require?", "Which candidates have matching skills?"]}
 
-Return valid JSON: {"sub_queries": ["q1", "q2", ...]}.
+Return valid JSON only: {"sub_queries": ["q1", "q2", ...]}.
 
 Query: %s`, qc.OriginalQuery)
 
@@ -170,8 +149,8 @@ func (s *RoutingStage) Run(ctx context.Context, qc *QueryContext) error {
 	qc.QueryEmbedding = embedding
 	qc.TopScore = topScore
 
-	// If mode was explicitly requested, honor it.
-	if qc.RequestedMode != "" {
+	// If mode was explicitly requested (and not auto), honor it.
+	if qc.RequestedMode != "" && strings.ToLower(qc.RequestedMode) != "auto" {
 		qc.RetrievalMode = strings.ToUpper(qc.RequestedMode)
 		log.Printf("retrieval: mode=%s (explicit) similarity=%.4f", qc.RetrievalMode, topScore)
 		return nil
