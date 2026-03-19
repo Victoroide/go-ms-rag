@@ -103,3 +103,14 @@ S3 initialization is non-fatal. If S3 fails to initialize, the service runs with
 |---|---|---|
 | `fingerprint` | TEXT | SHA-256 hex of content |
 | `document_id` | UUID | FK to documents |
+
+## Scripts
+
+Operational tools in `scripts/` are not part of the service binary. They share the same Go module but are excluded from the Docker build via `.dockerignore`.
+
+```bash
+make cleanup   # deletes all data from Pinecone and Neon
+make validate  # runs the 14-query business validation
+```
+
+Run these only against a known environment. Never run cleanup against production without a backup.
