@@ -13,76 +13,90 @@ import (
 	"github.com/Victoroide/go-ms-rag/internal/store/postgres"
 )
 
-// ExtractNamedEntity extracts the first meaningful noun phrase from text
-// For candidate profiles and job descriptions, this is typically the person's name or company name
+// stopWords are common English words that should not be treated as named entities
+// even when capitalised (e.g. at the start of a sentence or title).
+var stopWords = map[string]bool{
+	"a": true, "an": true, "the": true, "and": true, "or": true,
+	"for": true, "in": true, "on": true, "at": true, "to": true,
+	"of": true, "with": true, "by": true, "from": true, "is": true,
+	"are": true, "was": true, "were": true, "be": true, "been": true,
+	"job": true, "opening": true, "position": true, "role": true,
+	"senior": true, "junior": true, "mid-level": true, "lead": true,
+	"engineer": true, "developer": true, "manager": true, "architect": true,
+	"software": true, "backend": true, "frontend": true, "fullstack": true,
+	"data": true, "devops": true, "cloud": true, "infrastructure": true,
+	"company": true, "requirements": true, "experience": true, "skills": true,
+	"years": true, "team": true, "about": true, "what": true, "how": true,
+	"which": true, "who": true, "find": true, "list": true, "match": true,
+	"describe": true, "tell": true, "compare": true, "best": true,
+}
+
+// isStopWord returns true if the lowercased word is a generic stop word.
+func isStopWord(word string) bool {
+	// Strip trailing punctuation before checking.
+	clean := strings.TrimRight(strings.ToLower(word), ":;,.-!?")
+	return stopWords[clean]
+}
+
+// ExtractNamedEntity extracts the first proper noun phrase (person or company
+// name) from a content preview.  It requires at least two consecutive
+// capitalised, non-stop words so that generic titles like "Job Opening" or
+// "Senior Backend Engineer" are ignored.
 func ExtractNamedEntity(text string) string {
-	// Clean up the text
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""
 	}
 
-	// Split into words
 	words := strings.Fields(text)
-	if len(words) == 0 {
-		return ""
-	}
 
-	// Look for patterns that suggest names:
-	// - Words starting with capital letters
-	// - Multiple consecutive capitalized words (e.g., "Laura Benitez")
-	// - Company names with special patterns (e.g., "NVision-X", "DataFlow")
-
-	var entityWords []string
 	i := 0
-
 	for i < len(words) {
 		word := words[i]
 
-		// Check if word looks like a name (starts with capital and contains letters)
-		if word != "" && unicode.IsLetter(rune(word[0])) && string(word[0]) == strings.ToUpper(string(word[0])) {
-			// Start collecting potential entity words
-			entityWords = append(entityWords, word)
+		// Skip stop words and non-capitalised words.
+		if isStopWord(word) || !isCapitalised(word) {
 			i++
-
-			// Look for more capitalized words (for multi-word names)
-			for i < len(words) {
-				nextWord := words[i]
-				// Continue if next word is also capitalized or is a common name connector
-				if nextWord != "" && unicode.IsLetter(rune(nextWord[0])) &&
-					(string(nextWord[0]) == strings.ToUpper(string(nextWord[0])) ||
-						strings.ToLower(nextWord) == "de" ||
-						strings.ToLower(nextWord) == "del" ||
-						strings.ToLower(nextWord) == "la" ||
-						strings.ToLower(nextWord) == "von") {
-					entityWords = append(entityWords, nextWord)
-					i++
-				} else {
-					break
-				}
-			}
-
-			// If we collected 2+ words or the word has special characters (like DataFlow), return it
-			entity := strings.Join(entityWords, " ")
-			if len(entityWords) >= 2 || strings.ContainsAny(entity, "-") || strings.ContainsAny(entity, "Flow") {
-				return strings.ToLower(entity)
-			}
-
-			// Reset for next potential entity
-			entityWords = nil
-		} else {
-			i++
+			continue
 		}
-	}
 
-	// If no multi-word entity found, return the first capitalized word in lowercase
-	for _, word := range words {
-		if word != "" && unicode.IsLetter(rune(word[0])) && string(word[0]) == strings.ToUpper(string(word[0])) {
-			return strings.ToLower(word)
+		// Start collecting a candidate entity phrase.
+		var entityWords []string
+		entityWords = append(entityWords, word)
+		i++
+
+		for i < len(words) {
+			next := words[i]
+			lower := strings.ToLower(next)
+			// Allow name connectors (de, del, la, von).
+			isConnector := lower == "de" || lower == "del" || lower == "la" || lower == "von"
+			if isConnector || (isCapitalised(next) && !isStopWord(next)) {
+				entityWords = append(entityWords, next)
+				i++
+			} else {
+				break
+			}
 		}
+
+		// Only accept phrases of 2+ non-connector words as proper entities.
+		if len(entityWords) >= 2 {
+			return strings.ToLower(strings.Join(entityWords, " "))
+		}
+
+		// Single capitalised word — skip, too ambiguous.
+		entityWords = nil
 	}
 
 	return ""
+}
+
+// isCapitalised returns true if the first rune of word is an uppercase letter.
+func isCapitalised(word string) bool {
+	if word == "" {
+		return false
+	}
+	r := rune(word[0])
+	return unicode.IsLetter(r) && unicode.IsUpper(r)
 }
 
 // entityCache provides a TTL cache for named entities
@@ -138,11 +152,12 @@ func FetchNamedEntitiesFromDB(ctx context.Context, cfg *config.Config) (map[stri
 		entity := ExtractNamedEntity(preview)
 		if entity != "" {
 			entities[entity] = true
-			// Also add individual words for partial matching
-			words := strings.Fields(entity)
-			for _, word := range words {
-				if len(word) > 2 { // Skip very short words
-					entities[strings.ToLower(word)] = true
+			// Add individual words only for proper noun phrases (person names).
+			// Each word of "laura benitez" is useful; generic words are already
+			// filtered out by ExtractNamedEntity's stop-word list.
+			for _, word := range strings.Fields(entity) {
+				if len(word) > 2 {
+					entities[word] = true
 				}
 			}
 		}
