@@ -1,0 +1,7 @@
+scripts/
+docs/
+.env
+.env.*
+*.exe
+*.exe~
+tmp_*

@@ -1,4 +1,4 @@
-.PHONY: build test lint vet ci up down logs
+.PHONY: build test lint vet ci up down logs cleanup validate
 
 # Run inside container — no host deps needed
 build:
@@ -29,3 +29,9 @@ down:
 
 logs:
 	docker-compose logs -f app
+
+cleanup:
+	go run ./scripts/cleanup/main.go
+
+validate:
+	go run ./scripts/validate/main.go

@@ -29,14 +29,14 @@ func main() {
 		{"R2", "Describe Andres Castillo's experience with microservices", "LOCAL"},
 		{"R3", "What cloud platforms does Camila Rojas have experience with?", "LOCAL"},
 		{"R4", "Tell me about Marco Villanueva's leadership experience", "LOCAL"},
-		{"R5", "What is the tech stack for the NVision-X Senior Backend Engineer role?", "LOCAL"},
+		{"R5", "What is the tech stack for the Senior Backend Engineer role?", "GLOBAL"},
 		{"R6", "What are the key responsibilities for the DataFlow Senior Data Engineer position?", "LOCAL"},
 		{"R7", "How many years of experience does Laura Benitez have?", "LOCAL"},
 		{"C1", "Which candidates have AWS Bedrock experience?", "GLOBAL"},
 		{"C2", "Find candidates with Python and Spark skills", "GLOBAL"},
 		{"C3", "Who has experience with microservices architecture?", "GLOBAL"},
 		{"C4", "List all candidates with cloud computing experience", "GLOBAL"},
-		{"E1", "Match candidates to the NVision-X backend role", "GLOBAL"},
+		{"E1", "Match candidates to the Senior Backend Engineer role", "GLOBAL"},
 		{"E2", "Which candidates are suitable for the DataFlow data engineer position?", "GLOBAL"},
 		{"E3", "Find the best candidate for a role requiring Go and gRPC", "GLOBAL"},
 	}
@@ -59,7 +59,7 @@ func main() {
 
 		resp, err := http.Post(baseURL+"/query", "application/json", bytes.NewReader(bodyBytes))
 		if err != nil {
-			fmt.Printf("  ✗ ERROR: %v\n", err)
+			fmt.Printf("  ERROR: %v\n", err)
 			failed++
 			continue
 		}
@@ -69,7 +69,7 @@ func main() {
 
 		var result queryResponse
 		if err := json.Unmarshal(body, &result); err != nil {
-			fmt.Printf("  ✗ ERROR: decode response: %v\n", err)
+			fmt.Printf("  ERROR: decode response: %v\n", err)
 			failed++
 			continue
 		}
@@ -97,7 +97,7 @@ func main() {
 			fmt.Printf("  PASS - chunks=%d, mode=%s\n", result.ChunksUsed, result.Mode)
 			passed++
 		} else {
-			fmt.Printf("  ✗ FAIL - %s\n", strings.Join(issues, ", "))
+			fmt.Printf("  FAIL - %s\n", strings.Join(issues, ", "))
 			failed++
 		}
 	}
@@ -107,9 +107,9 @@ func main() {
 	fmt.Printf("Failed: %d / %d\n", failed, len(queries))
 
 	if failed > 0 {
-		fmt.Println("\n❌ Validation failed")
+		fmt.Println("\nValidation failed")
 		os.Exit(1)
 	}
 
-	fmt.Println("\n✅ All validation queries passed!")
+	fmt.Println("\nAll validation queries passed!")
 }
