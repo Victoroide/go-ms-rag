@@ -113,8 +113,8 @@ func (s *PersistStage) Run(ctx context.Context, ic *IngestContext) error {
 
 	// 3. Insert document record.
 	preview := ic.RawText
-	if len(preview) > 60 {
-		preview = preview[:60]
+	if len(preview) > 120 {
+		preview = preview[:120]
 	}
 	doc := domain.Document{
 		ID:             ic.DocumentID,
