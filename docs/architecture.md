@@ -2,124 +2,504 @@
 
 ## Overview
 
-go-ms-rag is a retrieval-augmented generation (RAG) microservice written in Go. It ingests documents (text, PDF, DOCX, DOC), splits them into token-bounded chunks, generates vector embeddings via AWS Bedrock, stores vectors in Pinecone, persists metadata in PostgreSQL (Neon), and optionally uploads source files to AWS S3.
+go-ms-rag is a retrieval-augmented generation (RAG) microservice written in Go. It ingests documents (plain text via JSON, or PDF/DOCX/DOC via multipart upload), splits them into token-bounded chunks, generates vector embeddings via AWS Bedrock Titan Embed V2, stores vectors in Pinecone, persists metadata in PostgreSQL (Neon), and optionally uploads source files to AWS S3. Queries are answered through an adaptive LOCAL/GLOBAL retrieval pipeline with LLM-based query decomposition and answer synthesis via AWS Bedrock. The service is domain-agnostic; document type classification (`candidate` vs `job`) is the only domain concept and is driven entirely by content or caller override, not hardcoded business logic.
 
-## Component Diagram
+## Component Map
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      HTTP API                           │
-│  POST /ingest (JSON or multipart)                       │
-│  POST /query                                            │
-│  GET  /health                                           │
-│  GET  /documents/{doc_id}/file                          │
-└────────────┬────────────────────────────────────────────┘
-             │
-     ┌───────▼────────┐
-     │  Worker Queue   │  buffered channel, single consumer
-     └───────┬────────┘
-             │
-     ┌───────▼────────────────────────┐
-     │     Ingestion Pipeline         │
-     │  ChunkStage → EmbedStage →     │
-     │  PersistStage                  │
-     └──┬──────────┬─────────────┬───┘
-        │          │             │
-   ┌────▼───┐ ┌───▼────┐  ┌────▼─────┐
-   │Pinecone│ │Postgres │  │   S3     │
-   │(vectors)│ │(metadata)│  │(files)   │
-   └────────┘ └─────────┘  └──────────┘
+cmd/server/main.go
+  |
+  +---> internal/config        (env var loading)
+  +---> internal/store/postgres (ChunkStore impl)
+  +---> internal/store/pinecone (VectorStore impl via Driver)
+  +---> internal/store/s3       (FileStore impl)
+  +---> internal/embedder       (EmbeddingProvider impl)
+  +---> internal/llm            (Converser, Ambassador, Router)
+  +---> internal/chunker        (Chunker, Fingerprint)
+  +---> internal/retriever      (Retriever: uses VectorStore + EmbeddingProvider)
+  +---> internal/worker         (Worker: uses pipeline.Stage[] + ChunkStore)
+  |       +---> internal/pipeline (ChunkStage, EmbedStage, PersistStage)
+  |               +---> internal/chunker
+  |               +---> domain.EmbeddingProvider
+  |               +---> domain.VectorStore
+  |               +---> domain.ChunkStore
+  +---> internal/api            (Router, middleware)
+          +---> internal/api/handler
+          |       +---> handler.IngestHandler  (Worker, ChunkStore, S3Client)
+          |       +---> handler.QueryHandler   (Retriever, Ambassador, Config)
+          |       +---> handler.FileHandler    (ChunkStore, S3Client)
+          |       +---> handler.DeleteHandler  (ChunkStore, PineconeDriver, S3Client)
+          |       +---> handler.HealthHandler  (VectorStore, ChunkStore, Ambassador, S3Client)
+          +---> internal/api/middleware
+                  +---> middleware.Logging
+                  +---> middleware.Recovery
+
+internal/domain  (imported by all packages above; imports nothing from internal/)
+internal/cleanup (standalone utility; imports config, pinecone, postgres)
 ```
 
-## Package Layout
+## Domain Layer (internal/domain/)
 
-| Package | Responsibility |
-|---|---|
-| `cmd/server` | Entry point, dependency wiring, HTTP server lifecycle |
-| `internal/api` | Router, middleware, HTTP handlers |
-| `internal/chunker` | Token-bounded sliding-window text chunking, fingerprinting |
-| `internal/config` | Environment-based configuration loading and validation |
-| `internal/domain` | Core types and interfaces shared across packages |
-| `internal/embedder` | AWS Bedrock Titan embedding provider |
-| `internal/extractor` | Text extraction from PDF, DOCX, DOC files |
-| `internal/llm` | Bedrock LLM client and ambassador (primary/fallback) |
-| `internal/pipeline` | Ingestion and retrieval pipeline stages |
-| `internal/retriever` | Adaptive local/global retrieval with query decomposition |
-| `internal/store/pinecone` | Pinecone vector store client and driver |
-| `internal/store/postgres` | PostgreSQL metadata store, migrations |
-| `internal/store/s3` | AWS S3 file storage client |
-| `internal/worker` | Async ingest queue with buffered channel |
+### types.go
 
-## Data Flow
+**DocumentID** -- `type DocumentID string`
 
-### Ingestion (JSON)
+**ChunkID** -- `type ChunkID string`
 
-1. `POST /ingest` receives JSON with `content` field.
-2. Handler computes fingerprint and checks for duplicates.
-3. Task is enqueued to the worker queue.
-4. Worker runs the ingestion pipeline: Chunk → Embed → Persist.
-5. PersistStage upserts vectors to Pinecone (document namespace + default namespace), inserts document and chunk metadata to Postgres, and stores the fingerprint.
-6. Document status is updated to `completed` or `failed`.
+**Chunk**
 
-### Ingestion (File Upload)
+| Field | Type | JSON Tag | Description |
+|---|---|---|---|
+| `ID` | `ChunkID` | `"id"` | Unique chunk identifier (SHA-256 of docID+index) |
+| `DocumentID` | `DocumentID` | `"document_id"` | Parent document ID |
+| `Index` | `int` | `"chunk_index"` | Zero-based position within the document |
+| `Text` | `string` | `"text"` | Chunk text content |
+| `TokenCount` | `int` | `"token_count"` | Approximate token count (words * 1.3) |
+| `Embedding` | `[]float32` | `"embedding,omitempty"` | Vector embedding; omitted from JSON when empty |
+| `Metadata` | `map[string]any` | `"metadata,omitempty"` | Arbitrary metadata; `doc_type` is injected by PersistStage |
 
-1. `POST /ingest` receives `multipart/form-data` with a `file` field.
-2. Handler validates file type (.pdf, .docx, .doc) and size (≤20MB).
-3. Text is extracted from the file using the appropriate extractor.
-4. File is uploaded to S3 at `documents/{doc_type}/{doc_id}/{filename}`.
-5. Extracted text follows the same pipeline as JSON ingestion.
-6. File metadata (file_name, file_type, s3_key) is stored in Postgres.
+**Document**
 
-### File Retrieval
+| Field | Type | JSON Tag | Nullable | Description |
+|---|---|---|---|---|
+| `ID` | `DocumentID` | `"id"` | no | UUID primary key |
+| `Content` | `string` | `"content"` | no | Full document text |
+| `ContentPreview` | `string` | `"content_preview,omitempty"` | yes | First 120 chars; used for named entity extraction |
+| `Metadata` | `map[string]any` | `"metadata,omitempty"` | yes | Arbitrary metadata JSONB; includes `doc_type` |
+| `Fingerprint` | `string` | `"fingerprint"` | no | SHA-256 hex of content |
+| `ChunkCount` | `int` | `"chunk_count"` | no | Number of chunks produced |
+| `FileName` | `*string` | `"file_name,omitempty"` | yes | Original uploaded filename |
+| `FileType` | `*string` | `"file_type,omitempty"` | yes | File type string (e.g. `"pdf"`) |
+| `S3Key` | `*string` | `"s3_key,omitempty"` | yes | S3 object key |
 
-1. `GET /documents/{doc_id}/file` looks up the S3 key in Postgres.
-2. If a file exists, a presigned GET URL (15-minute expiry) is returned.
+**QueryResult**
 
-### Query
+| Field | Type | JSON Tag | Description |
+|---|---|---|---|
+| `Answer` | `string` | `"answer"` | Synthesized answer text |
+| `Mode` | `string` | `"mode"` | Retrieval mode used (`LOCAL` or `GLOBAL`) |
+| `ChunksUsed` | `int` | `"chunks_used"` | Number of chunks used |
+| `TokenUsage` | `TokenUsage` | `"token_usage"` | LLM token consumption |
+| `Chunks` | `[]Chunk` | `"chunks,omitempty"` | Retrieved chunks |
 
-1. `POST /query` performs named entity detection, decomposes the query, routes to local or global retrieval, retrieves relevant chunks, and synthesizes an answer via the LLM.
+**TokenUsage**
+
+| Field | Type | JSON Tag | Description |
+|---|---|---|---|
+| `InputTokens` | `int32` | `"input_tokens"` | Tokens sent to LLM |
+| `OutputTokens` | `int32` | `"output_tokens"` | Tokens generated by LLM |
+| `TotalTokens` | `int32` | `"total_tokens"` | Sum of input + output |
+
+**ScoredChunk**
+
+| Field | Type | JSON Tag | Description |
+|---|---|---|---|
+| `Chunk` | `Chunk` | `"chunk"` | The chunk data |
+| `Score` | `float64` | `"score"` | Cosine similarity score from Pinecone |
+| `Namespace` | `string` | `"namespace,omitempty"` | Pinecone namespace the chunk was retrieved from |
+
+### interfaces.go
+
+**EmbeddingProvider**
+
+| Method | Signature | Implemented By |
+|---|---|---|
+| `Embed` | `(ctx context.Context, text string) ([]float32, error)` | `embedder.BedrockEmbedder` |
+
+**LLMProvider**
+
+| Method | Signature | Implemented By |
+|---|---|---|
+| `Generate` | `(ctx context.Context, prompt string, maxTokens int) (string, error)` | (not currently used; Ambassador pattern is used instead) |
+
+**VectorStore**
+
+| Method | Signature | Implemented By |
+|---|---|---|
+| `Upsert` | `(ctx context.Context, namespace string, chunks []Chunk) error` | `pinecone.Driver` |
+| `Query` | `(ctx context.Context, namespace string, embedding []float32, topK int, docTypeFilter string) ([]ScoredChunk, error)` | `pinecone.Driver` |
+| `QueryAllNamespaces` | `(ctx context.Context, embedding []float32, topK int, docTypeFilter string) ([]ScoredChunk, error)` | `pinecone.Driver` |
+| `Delete` | `(ctx context.Context, namespace string, ids []string) error` | `pinecone.Driver` |
+| `Ping` | `(ctx context.Context) error` | `pinecone.Driver` |
+
+**ChunkStore**
+
+| Method | Signature | Implemented By |
+|---|---|---|
+| `InsertDocument` | `(ctx context.Context, doc Document) error` | `postgres.Client` |
+| `InsertChunks` | `(ctx context.Context, chunks []Chunk) error` | `postgres.Client` |
+| `GetDocument` | `(ctx context.Context, id DocumentID) (*Document, error)` | `postgres.Client` |
+| `GetDocumentS3Key` | `(ctx context.Context, id DocumentID) (*string, error)` | `postgres.Client` |
+| `UpdateDocumentStatus` | `(ctx context.Context, id DocumentID, status string) error` | `postgres.Client` |
+| `CheckFingerprint` | `(ctx context.Context, fingerprint string) (DocumentID, bool, error)` | `postgres.Client` |
+| `StoreFingerprint` | `(ctx context.Context, fingerprint string, docID string) error` | `postgres.Client` |
+| `DeleteDocument` | `(ctx context.Context, id DocumentID) error` | `postgres.Client` |
+| `Ping` | `(ctx context.Context) error` | `postgres.Client` |
+| `Close` | `(ctx context.Context) error` | `postgres.Client` |
+| `RunMigrations` | `(ctx context.Context) error` | `postgres.Client` |
+
+**FileStore**
+
+| Method | Signature | Implemented By |
+|---|---|---|
+| `Upload` | `(ctx context.Context, docID, docType, filename string, ft string, r io.Reader) (string, error)` | `s3.Client` |
+| `PresignGet` | `(ctx context.Context, s3Key string) (string, error)` | `s3.Client` |
+| `Delete` | `(ctx context.Context, s3Key string) error` | `s3.Client` |
+| `Ping` | `(ctx context.Context) error` | `s3.Client` |
+
+## Configuration (internal/config/)
+
+See [configuration.md](configuration.md) for the full environment variable table. The `Config` struct fields map 1:1 to env vars.
+
+| Config Field | Type | Env Var | Required | Default |
+|---|---|---|---|---|
+| `ServerPort` | `string` | `SERVER_PORT` | no | `"8081"` |
+| `AWSRegion` | `string` | `AWS_REGION` | yes | -- |
+| `AWSAccessKeyID` | `string` | `AWS_ACCESS_KEY_ID` | yes | -- |
+| `AWSSecretKey` | `string` | `AWS_SECRET_ACCESS_KEY` | yes | -- |
+| `BedrockEmbedModel` | `string` | `BEDROCK_EMBED_MODEL` | no | `"amazon.titan-embed-text-v2:0"` |
+| `BedrockPrimaryModel` | `string` | `BEDROCK_PRIMARY_MODEL` | no | `"amazon.nova-micro-v1:0"` |
+| `BedrockFallbackModel` | `string` | `BEDROCK_FALLBACK_MODEL` | no | `"us.meta.llama4-maverick-17b-instruct-v1:0"` |
+| `PineconeAPIKey` | `string` | `PINECONE_API_KEY` | yes | -- |
+| `PineconeIndexName` | `string` | `PINECONE_INDEX_NAME` | no | `"go-ms-rag"` |
+| `PineconeEnvironment` | `string` | `PINECONE_ENVIRONMENT` | no | -- |
+| `DatabaseURL` | `string` | `DATABASE_URL` | yes | -- |
+| `WorkerQueueSize` | `int` | `WORKER_QUEUE_SIZE` | no | `100` |
+| `EmbedConcurrency` | `int` | `EMBED_CONCURRENCY` | no | `10` |
+| `LocalRetrievalThreshold` | `float64` | `LOCAL_RETRIEVAL_THRESHOLD` | no | `0.70` |
+| `MaxChunksPerQuery` | `int` | `MAX_CHUNKS_PER_QUERY` | no | `10` |
+| `ChunkTokenSize` | `int` | `CHUNK_TOKEN_SIZE` | no | `512` |
+| `ChunkOverlap` | `int` | `CHUNK_OVERLAP` | no | `64` |
+| `EmbeddingDimensions` | `int` | `EMBEDDING_DIMENSIONS` | no | `1024` |
+| `S3Bucket` | `string` | `S3_BUCKET` | no | `"ms-go-rag"` |
+| `MaxUploadBytes` | `int64` | `MAX_UPLOAD_BYTES` | no | `20971520` |
+
+Validation rules:
+- `WORKER_QUEUE_SIZE` must be 1--1000.
+- `EMBED_CONCURRENCY` must be 1--50.
+- All five required variables cause a fatal startup error if empty.
+
+## Ingest Pipeline
+
+Stages are defined in `internal/pipeline/ingest_stage.go` and run sequentially via `RunIngestionPipeline`.
+
+| Stage | StageID | Input | Output | Key Operations | Log Lines |
+|---|---|---|---|---|---|
+| **ChunkStage** | `chunk` | `IngestContext.RawText` | `IngestContext.Chunks` | Splits text via sliding-window chunker. Returns error if 0 chunks. | `chunk_stage: document={id} chunks={n}` |
+| **EmbedStage** | `embed` | `IngestContext.Chunks[].Text` | `IngestContext.Chunks[].Embedding` | Calls `EmbeddingProvider.Embed` sequentially for each chunk. | `embed_stage: document={id} embedded={n} chunks` |
+| **PersistStage** | `persist` | `IngestContext.Chunks`, `.Metadata`, `.DocType` | Pinecone vectors + Postgres rows | 1. Determines `doc_type` (explicit `DocType` override or auto-detect via `detectDocType`). 2. Injects `doc_type` into `Metadata` and each chunk's metadata. 3. Upserts vectors to Pinecone namespace=doc_id. 4. Upserts vectors to Pinecone default namespace (empty string). 5. Inserts document record to Postgres. 6. Inserts chunk records to Postgres. 7. Stores SHA-256 fingerprint. | `persist_stage: document={id} doc_type={type} chunks={n} persisted` |
+
+**IngestContext fields:**
+
+| Field | Type | Set By |
+|---|---|---|
+| `DocumentID` | `domain.DocumentID` | Constructor |
+| `RawText` | `string` | Constructor |
+| `Chunks` | `[]domain.Chunk` | ChunkStage |
+| `Metadata` | `map[string]any` | Constructor / PersistStage |
+| `FileName` | `*string` | Worker (from IngestTask) |
+| `FileType` | `*string` | Worker (from IngestTask) |
+| `S3Key` | `*string` | Worker (from IngestTask) |
+| `DocType` | `string` | Worker (from IngestTask); if empty, PersistStage auto-detects |
+
+**detectDocType algorithm:** If `strings.ToLower(content)` contains `"job opening:"`, returns `"job"`. Otherwise returns `"candidate"`.
+
+## Query Pipeline
+
+Stages are defined in `internal/pipeline/query_stage.go` and run sequentially via `RunRetrievalPipeline`.
+
+| Stage | StageID | Input | Output | Key Operations | Log Lines |
+|---|---|---|---|---|---|
+| **DecomposeStage** | `query_decomposition` | `QueryContext.OriginalQuery` | `QueryContext.SubQueries`, `QueryContext.NamedEntity` | 1. Fetches named entities from DB (TTL cache). 2. Checks if query contains a known entity. 3. Sends decomposition prompt to LLM (primary model). 4. Parses JSON `{"sub_queries": [...]}` response. 5. Falls back to original query if LLM returns empty. | `decompose_stage: query="{q}" sub_queries={n}` |
+| **RoutingStage** | `retrieval_routing` | `QueryContext.OriginalQuery`, `.SubQueries`, `.RequestedMode`, `.NamedEntity` | `QueryContext.RetrievalMode`, `.QueryEmbedding`, `.TopScore` | 1. Embeds original query via `Retriever.EmbedQuery`. 2. If `RequestedMode` is set and not `"auto"`, uses it directly. 3. Otherwise calls `DetermineModeWithQuery`. | `retrieval: mode={MODE} (explicit) similarity={score}` or `retrieval: mode={MODE} sub_queries={n} similarity={score} named_entity={e}` |
+| **RetrievalStage** | `retrieval` | `QueryContext.RetrievalMode`, `.OriginalQuery`, `.MaxChunks`, `.FilterDocType` | `QueryContext.RetrievedChunks`, `.TopScore` | Calls `Retriever.Retrieve` with mode, empty namespace, maxChunks, and filterDocType. | (logged by Retriever) |
+| **SynthesisStage** | `synthesis` | `QueryContext.RetrievedChunks`, `.OriginalQuery` | `QueryContext.FinalAnswer`, `.TokenUsage` | 1. If 0 chunks, sets answer to "No relevant information found...". 2. Builds context block from chunks. 3. Routes to fallback model (Llama4 Maverick) for synthesis. 4. Tracks input/output token usage. | `synthesis_stage: mode={MODE} chunks={n} answer_len={len}` |
+
+**QueryContext fields:**
+
+| Field | Type | Set By |
+|---|---|---|
+| `OriginalQuery` | `string` | Handler |
+| `SubQueries` | `[]string` | DecomposeStage |
+| `MaxChunks` | `int` | Handler (from request) |
+| `RequestedMode` | `string` | Handler (from request `mode` field) |
+| `FilterDocType` | `string` | Handler (from request `filter_doc_type` field) |
+| `NamedEntity` | `string` | DecomposeStage |
+| `RetrievalMode` | `string` | RoutingStage (`"LOCAL"` or `"GLOBAL"`) |
+| `QueryEmbedding` | `[]float32` | RoutingStage |
+| `TopScore` | `float64` | RoutingStage / RetrievalStage |
+| `RetrievedChunks` | `[]domain.ScoredChunk` | RetrievalStage |
+| `FinalAnswer` | `string` | SynthesisStage |
+| `TokenUsage` | `domain.TokenUsage` | SynthesisStage |
 
 ## Named Entity Detection
 
-The system dynamically detects named entities (people, companies) from document previews to optimize query routing:
+Located in `internal/pipeline/named_entities.go`.
 
-- **Extraction**: For each document, the first 60 characters are stored in `content_preview`. The `ExtractNamedEntity` function identifies capitalized names and company names (e.g., "Laura Benitez", "DataFlow").
-- **Caching**: `FetchNamedEntitiesFromDB` loads all entities from Postgres with a 60-second TTL cache to avoid database round-trips on every query.
-- **Routing**: If a query contains a named entity, it skips LLM decomposition and routes directly to LOCAL mode, ensuring precise document retrieval.
+### ExtractNamedEntity
 
-## Data Model
+Extracts the first proper noun phrase from a content preview string.
 
-### Documents Table
-```sql
-CREATE TABLE documents (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    content         TEXT NOT NULL,
-    content_preview TEXT,                    -- First 60 chars for entity extraction
-    metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
-    status          TEXT NOT NULL DEFAULT 'processing',
-    chunk_count     INTEGER NOT NULL DEFAULT 0,
-    file_name       TEXT,                    -- For uploaded files
-    file_type       TEXT,                    -- MIME type of uploaded file
-    s3_key          TEXT,                    -- S3 object key
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-```
+**Algorithm:**
+1. Split text into whitespace-delimited words.
+2. Skip stop words and non-capitalised words. Stop words include common English words plus domain terms (`job`, `opening`, `engineer`, `developer`, `backend`, `frontend`, etc.).
+3. When a capitalised non-stop word is found, begin collecting a candidate phrase.
+4. Continue collecting if the next word is capitalised and non-stop, or is a name connector (`de`, `del`, `la`, `von`).
+5. If the collected phrase has 2+ words (excluding connectors), return it lowercased. Single capitalised words are rejected as ambiguous.
+6. If no phrase qualifies, return empty string.
 
-### Chunks Table
-```sql
-CREATE TABLE chunks (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    chunk_index INTEGER NOT NULL,
-    text        TEXT NOT NULL,
-    token_count INTEGER NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-```
+### FetchNamedEntitiesFromDB
+
+- **Query:** `SELECT content_preview FROM documents WHERE content_preview IS NOT NULL`
+- **Processing:** Runs `ExtractNamedEntity` on each preview. Stores full entity phrase and each individual word (if length > 2) into the result map.
+- **TTL Cache:** Global `entityCache` struct with `sync.RWMutex`, 60-second TTL. On cache hit, returns a copy of the map. On miss, opens a new Postgres connection, queries, updates cache.
+- **Thread Safety:** Read path uses `RLock`, write path uses full `Lock`.
+- **Cache Invalidation:** Time-based only (60s TTL). No explicit invalidation on document create/delete.
+
+### Role in Routing
+
+During `DecomposeStage`, if the lowercased query contains any cached entity string, `QueryContext.NamedEntity` is set. In `RoutingStage`, `DetermineModeWithQuery` uses it: a non-empty named entity on a single sub-query forces `LOCAL` mode regardless of similarity score.
+
+## Retriever
+
+Located in `internal/retriever/retriever.go`.
+
+### Constants
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `defaultTopK` | `10` | Default number of results if topK <= 0 |
+| `fallbackMinChunks` | `3` | Minimum chunks before GLOBAL fallback triggers |
+| `defaultSimilarityLimit` | `20` | TopK for fallback unrestricted search |
+
+### RetrievalMode
+
+| Constant | Value |
+|---|---|
+| `RetrievalModeLocal` | `"LOCAL"` |
+| `RetrievalModeGlobal` | `"GLOBAL"` |
+
+### DetermineMode(subQueryCount int, topScore float64) RetrievalMode
+
+- If `subQueryCount <= 1` AND `topScore >= threshold` -> `LOCAL`
+- Otherwise -> `GLOBAL`
+
+### DetermineModeWithQuery(query string, subQueryCount int, topScore float64, namedEntity string) RetrievalMode
+
+Decision tree (evaluated in order):
+1. `subQueryCount > 1` -> `GLOBAL` (LLM identified multiple information needs)
+2. `namedEntity != ""` -> `LOCAL` (query targets a specific known person/company)
+3. `topScore >= threshold` -> `LOCAL` (high similarity to existing vectors)
+4. Otherwise -> `GLOBAL`
+
+### Retrieve(ctx, query, mode, namespace, topK, docTypeFilter) (*Result, error)
+
+1. Embeds the query via `EmbeddingProvider.Embed`.
+2. Routes to `retrieveLocal` or `retrieveGlobal` based on mode.
+3. **Fallback:** If GLOBAL returns < 3 chunks, runs an additional `QueryAllNamespaces` with topK=20 and merges results (deduplicating by ChunkID).
+4. Sorts all chunks by score descending.
+5. Trims to topK.
+6. Returns `Result{Chunks, Mode, TopScore}`.
+
+**retrieveLocal:** Calls `VectorStore.Query(namespace, embedding, topK, docTypeFilter)`. If namespace is empty, falls back to `retrieveGlobal`.
+
+**retrieveGlobal:** Calls `VectorStore.QueryAllNamespaces(embedding, topK, docTypeFilter)`.
+
+### EmbedQuery(ctx, query) (embedding, topScore, error)
+
+1. Embeds the query.
+2. Runs `QueryAllNamespaces(embedding, 1, "")` to get the top similarity score for routing decisions.
+3. Returns embedding and topScore.
+
+## Chunker
+
+Located in `internal/chunker/chunker.go`.
+
+- **Algorithm:** Sliding window over whitespace-delimited words.
+- **Token approximation:** `wordCount * 1.3` (the `tokenApproximationFactor` constant).
+- **Window size:** `chunkSize / 1.3` words per chunk (default chunkSize=512 tokens -> ~393 words).
+- **Overlap:** `overlap / 1.3` words shared between consecutive chunks (default overlap=64 tokens -> ~49 words).
+- **Stride:** `wordsPerChunk - wordsOverlap` (minimum 1).
+- **Pre-processing:** Strips HTML tags via regex, normalizes whitespace.
+- **Chunk ID:** `SHA-256(docID + chunkIndex)` truncated to 16 bytes hex.
+- **Fingerprint:** `SHA-256(content)` full hex string. Used for deduplication.
+
+## Embedder
+
+Located in `internal/embedder/bedrock.go`.
+
+- **Model:** `amazon.titan-embed-text-v2:0` (configurable via `BEDROCK_EMBED_MODEL`).
+- **Dimension:** 1024 (configurable via `EMBEDDING_DIMENSIONS`).
+- **Normalization:** Always enabled (`normalize: true` in request).
+- **Concurrency:** Bounded by `semaphore.Weighted` with weight from `EMBED_CONCURRENCY` (default 10).
+- **Embed method:** Acquires semaphore slot, calls `InvokeModel` with JSON payload, returns `[]float32`.
+- **EmbedBatch method:** Launches one goroutine per text, each calls `Embed` (which acquires its own semaphore slot). Collects results via error channel.
+
+## LLM Ambassador
+
+Located in `internal/llm/ambassador.go`, `bedrock.go`, `router.go`.
+
+### Models
+
+| Task Type | Primary Model | Fallback Model |
+|---|---|---|
+| `chunk_extraction` | `amazon.nova-micro-v1:0` | `us.meta.llama4-maverick-17b-instruct-v1:0` |
+| `query_decomposition` | `amazon.nova-micro-v1:0` | `us.meta.llama4-maverick-17b-instruct-v1:0` |
+| `sub_query_answer` | `amazon.nova-micro-v1:0` | `us.meta.llama4-maverick-17b-instruct-v1:0` |
+| `synthesis` | (always fallback) | `us.meta.llama4-maverick-17b-instruct-v1:0` |
+
+### Routing Rules (in order)
+
+1. **Context limit:** If `ContextTokens >= 60000` (NovaMicroSafeContextLimit), route to fallback.
+2. **Synthesis:** Always route to fallback (Llama4 Maverick).
+3. **Structured output failure:** If `PreviousFailed` and reason is `json_invalid` or `empty_result`, route to fallback.
+4. **Default:** Route to primary (Nova Micro).
+
+### Retry/Fallback Behavior (retryWithCorrection)
+
+For primary model calls:
+1. **Attempt 1:** Call primary model. If valid JSON and non-empty, return.
+2. **Attempt 2:** Send JSON correction prompt (includes previous output + error) to primary model. If valid JSON, return.
+3. **Attempt 3:** Signal `NeedsReroute` so the caller re-routes to fallback model.
+
+For all calls: exponential backoff with jitter on retryable errors (`ThrottlingException`, `ServiceUnavailableException`, `RequestTimeoutException`, HTTP 429/503). Max 5 retries, base delay 500ms, max delay 30s.
+
+### Token Estimation
+
+`EstimateTokens(s string) int` -> `len([]rune(s)) / 4`
+
+## Extractor
+
+Located in `internal/extractor/extractor.go`.
+
+| FileType | Extension | Extractor | Library |
+|---|---|---|---|
+| `pdf` | `.pdf` | `pdfExtractor` | `github.com/ledongthuc/pdf` |
+| `docx` | `.docx` | `docxExtractor` | `archive/zip` + `encoding/xml` |
+| `doc` | `.doc` | `docExtractor` | `github.com/richardlehane/mscfb` |
+| `text` | -- | `textExtractor` | stdlib |
+
+`DetectFileType(filename)` matches by lowercase extension. Returns error for unsupported extensions.
+
+`New(ft)` returns the appropriate extractor. Unknown types fall back to `textExtractor`.
+
+## Store Layer
+
+### Pinecone (internal/store/pinecone/)
+
+**PineconeClient** (`client.go`): Wraps the official Pinecone Go SDK v1.1.1. Namespace-scoped connections are cached in a `map[string]*pinecone.IndexConnection` protected by `sync.Mutex`.
+
+**Driver** (`driver.go`): Implements `domain.VectorStore` by delegating to `PineconeClient`. Also exposes `DeleteAllVectorsInNamespace` and `DeleteByDocID` which are not part of the `VectorStore` interface.
+
+| Method | Signature | Behavior |
+|---|---|---|
+| `Upsert` | `(ctx, namespace, chunks) error` | Builds `pinecone.Vector` structs with metadata fields: `doc_id`, `chunk_index`, `text`, `token_count`, `doc_type`. Calls `UpsertVectors`. |
+| `Query` | `(ctx, namespace, embedding, topK, docTypeFilter) ([]ScoredChunk, error)` | Queries a specific namespace. If `docTypeFilter` is non-empty, adds a `MetadataFilter` on `doc_type`. |
+| `QueryAllNamespaces` | `(ctx, embedding, topK, docTypeFilter) ([]ScoredChunk, error)` | Queries the default (empty) namespace. Same filter logic. |
+| `Delete` | `(ctx, namespace, ids) error` | Calls `DeleteVectorsById`. |
+| `DeleteAllVectorsInNamespace` | `(ctx, namespace) error` | Calls SDK's native `IndexConnection.DeleteAllVectorsInNamespace(ctx)`. |
+| `DeleteByDocID` | `(ctx, docID) error` | Calls `IndexConnection.DeleteVectorsByFilter` with `{doc_id: docID}` filter on the default namespace. |
+| `DescribeIndexStats` | `(ctx) (*DescribeIndexStatsResponse, error)` | Returns per-namespace vector counts. |
+| `Ping` | `(ctx) error` | Calls `DescribeIndex`. |
+
+**Namespace strategy:** Each document gets its own namespace (namespace = doc_id UUID string). All vectors are also upserted to the default namespace (empty string) for global queries. On delete, both the document namespace and default namespace vectors are cleaned up.
+
+**Metadata fields written per vector:** `doc_id` (string), `chunk_index` (float64), `text` (string), `token_count` (float64), `doc_type` (string).
+
+### Postgres (internal/store/postgres/)
+
+**Schema (after all 4 migrations):**
+
+**documents**
+
+| Column | Type | Nullable | Default | Description |
+|---|---|---|---|---|
+| `id` | `UUID` | no | `gen_random_uuid()` | Primary key |
+| `content` | `TEXT` | no | -- | Full document text |
+| `content_preview` | `TEXT` | yes | -- | First 120 chars (migration 003) |
+| `metadata` | `JSONB` | no | `'{}'::jsonb` | Arbitrary metadata |
+| `status` | `TEXT` | no | `'processing'` | `processing`, `completed`, `failed` |
+| `chunk_count` | `INTEGER` | no | `0` | Number of chunks |
+| `file_name` | `TEXT` | yes | -- | Original filename (migration 002) |
+| `file_type` | `TEXT` | yes | -- | File type string (migration 002) |
+| `s3_key` | `TEXT` | yes | -- | S3 object key (migration 002) |
+| `doc_type` | `TEXT` | no | `'candidate'` | Document type (migration 004) |
+| `created_at` | `TIMESTAMPTZ` | no | `NOW()` | Creation timestamp |
+
+**chunks**
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | `UUID` | no | Primary key |
+| `document_id` | `UUID` | no | FK to documents (ON DELETE CASCADE) |
+| `chunk_index` | `INTEGER` | no | Chunk position |
+| `text` | `TEXT` | no | Chunk text |
+| `token_count` | `INTEGER` | no | Approximate token count |
+| `created_at` | `TIMESTAMPTZ` | no | Creation timestamp |
+
+**document_fingerprints**
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `fingerprint` | `TEXT` | no | SHA-256 hex (primary key) |
+| `document_id` | `UUID` | no | FK to documents (ON DELETE CASCADE) |
+| `created_at` | `TIMESTAMPTZ` | no | Creation timestamp |
+
+**Indexes:** `idx_chunks_document_id`, `idx_fingerprints_document_id`, `idx_documents_content_preview` (on `LOWER(content_preview)`).
+
+### S3 (internal/store/s3/)
+
+| Method | Signature | Behavior |
+|---|---|---|
+| `Upload` | `(ctx, docID, docType, filename, ft, reader) (string, error)` | PutObject to `documents/{docType}/{docID}/{filename}`. Sets Content-Type from FileType. |
+| `PresignGet` | `(ctx, s3Key) (string, error)` | Returns presigned GET URL, 15-minute expiry. |
+| `Delete` | `(ctx, s3Key) error` | DeleteObject by key. |
+| `Ping` | `(ctx) error` | HeadBucket. |
+
+**Key format:** `documents/{doc_type}/{doc_id}/{filename}`
+
+**Presigned URL TTL:** 15 minutes (hardcoded).
+
+## Worker
+
+Located in `internal/worker/worker.go`.
+
+### IngestTask fields
+
+| Field | Type | Description |
+|---|---|---|
+| `DocumentID` | `domain.DocumentID` | UUID for the new document |
+| `Content` | `string` | Raw text to ingest |
+| `Metadata` | `map[string]any` | Caller-provided metadata |
+| `FileName` | `*string` | Original filename (multipart only) |
+| `FileType` | `*string` | File type string (multipart only) |
+| `S3Key` | `*string` | S3 key if file was uploaded |
+| `DocType` | `string` | Explicit doc_type override; empty means auto-detect |
+
+### Queue
+
+- Buffered channel with capacity from `WORKER_QUEUE_SIZE` (default 100).
+- `Enqueue` is non-blocking; returns `false` if channel is full.
+
+### Processing Flow
+
+1. Single goroutine consumes from the channel.
+2. Computes fingerprint via `chunker.Fingerprint`.
+3. Checks for duplicate via `ChunkStore.CheckFingerprint`. If duplicate, logs and skips.
+4. Builds `IngestContext` from task fields.
+5. Runs `RunIngestionPipeline` (ChunkStage -> EmbedStage -> PersistStage).
+6. On success: `UpdateDocumentStatus(completed)`.
+7. On failure: `UpdateDocumentStatus(failed)`.
+8. Panic recovery: catches panics, sets status to `failed`.
+
+### Shutdown
+
+`Shutdown()` cancels the worker context, closes the channel, and waits for the consumer goroutine via `sync.WaitGroup`.
 
 ## Concurrency Model
 
-- **Worker Queue**: Single-consumer buffered channel processes ingestions sequentially to avoid resource contention.
-- **S3 Upload**: Uses `errgroup` to concurrently upload file to S3 while generating embeddings, reducing total ingestion latency.
-- **Embedding Generation**: Batches requests to Bedrock with configurable concurrency (`EMBED_CONCURRENCY`).
-- **Query Processing**: Each request runs in its own goroutine; named entity cache uses `sync.RWMutex` for concurrent access.
+- **Worker Queue:** Single-consumer buffered channel. Ingestions are processed sequentially. The consumer goroutine runs for the lifetime of the service.
+- **Embedding Semaphore:** `BedrockEmbedder` uses `semaphore.Weighted` (capacity = `EMBED_CONCURRENCY`) to bound concurrent Bedrock InvokeModel calls. `EmbedBatch` launches goroutines but each acquires its own semaphore slot.
+- **Named Entity Cache:** `entityCache` struct with `sync.RWMutex`. Read path acquires `RLock` and returns a map copy. Write path acquires full `Lock`. TTL is 60 seconds.
+- **Pinecone Connection Cache:** `PineconeClient.connCache` map protected by `sync.Mutex`. Connections are created on first use per namespace and reused thereafter.
+- **HTTP:** Each request runs in its own goroutine (standard `net/http` behavior). Server has 30s read timeout, 120s write timeout.

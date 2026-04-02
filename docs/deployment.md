@@ -2,65 +2,114 @@
 
 ## Prerequisites
 
-- Go 1.26+
-- Docker 27+ (for containerized deployment)
-- AWS account with Bedrock and S3 access
-- Pinecone index (dimension 1024, cosine metric)
-- PostgreSQL database (Neon recommended)
+| Dependency | Version | Source |
+|---|---|---|
+| Go | 1.26+ | `go.mod` line 3 |
+| Docker | 27+ | For containerized deployment |
+| AWS account | -- | Bedrock (Titan Embed V2, Nova Micro, Llama4 Maverick) + S3 |
+| Pinecone | -- | Serverless or pod-based index |
+| PostgreSQL | -- | Neon recommended; any PG 14+ works |
 
-## Local Development
+Key Go module dependencies (from `go.mod`):
 
-1. Copy `.env.example` to `.env` and fill in credentials.
-2. Build and run:
-   ```bash
-   go build -o server ./cmd/server
-   ./server
-   ```
-3. The server starts on the port specified by `SERVER_PORT` (default 8081).
+| Module | Version |
+|---|---|
+| `github.com/pinecone-io/go-pinecone` | `v1.1.1` |
+| `github.com/jackc/pgx/v5` | `v5.8.0` |
+| `github.com/aws/aws-sdk-go-v2` | `v1.41.4` |
+| `github.com/aws/aws-sdk-go-v2/service/bedrockruntime` | `v1.49.0` |
+| `github.com/aws/aws-sdk-go-v2/service/s3` | `v1.97.1` |
+| `golang.org/x/sync` | `v0.19.0` |
+| `google.golang.org/protobuf` | `v1.36.11` |
 
-## Docker
+## Environment Setup
 
-Build and run with Docker Compose:
-```bash
-docker compose up --build
+Create a `.env` file with all required and optional variables. See [configuration.md](configuration.md) for the full list.
+
+Required variables (service will not start without these):
+
+```
+AWS_REGION=
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+PINECONE_API_KEY=
+DATABASE_URL=
 ```
 
-The Dockerfile provides four stages:
-- **test** — Runs `go vet` and `go test -race`.
-- **lint** — Runs `golangci-lint` with the project configuration.
-- **builder** — Compiles the binary with `CGO_ENABLED=0`.
-- **runtime** — Minimal Alpine image with the compiled binary.
+Do not commit secrets to version control. Use a `.env` file or a secrets manager.
+
+## Docker Compose
+
+The `docker-compose.yml` defines a single service:
+
+```yaml
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "8081:8081"
+    env_file:
+      - .env
+    restart: unless-stopped
+```
+
+**`app` service:** Builds the Go binary in a multi-stage Docker build and runs it as the sole container. All external dependencies (Postgres, Pinecone, S3, Bedrock) are remote services accessed via environment variables. There is no local database container.
+
+Build and run:
+
+```bash
+docker compose up --build -d
+```
+
+The Dockerfile has four stages:
+
+| Stage | Base | Purpose |
+|---|---|---|
+| `base` | `golang:1.26-alpine` | Installs gcc, musl-dev, git. Downloads Go modules. |
+| `test` | `base` | Runs `go vet ./...` and `CGO_ENABLED=1 go test ./... -count=1 -race`. |
+| `lint` | `base` | Installs and runs `golangci-lint` with project config. |
+| `builder` | `base` | Compiles binary: `CGO_ENABLED=0 go build -o /bin/server ./cmd/server`. |
+| `runtime` | `alpine:3.21` | Copies binary + migration SQL files. Exposes port 8081. |
+
+The `docker compose` target is `runtime`, which skips the `test` and `lint` stages. To run those in CI, target them explicitly.
 
 ## Database Migrations
 
-Migrations are embedded in the Go binary and applied automatically at startup. No external migration tool is needed. The three migration files are:
+Migrations are embedded in the Go binary via `//go:embed` and applied automatically at startup in `postgres.Client.RunMigrations`. No external migration tool is needed.
 
-1. `001_init.sql` — Core schema (documents, chunks, fingerprints).
-2. `002_add_file_storage.sql` — File storage columns (file_name, file_type, s3_key).
-3. `003_add_content_preview.sql` — Named entity extraction column (content_preview).
+| Migration | What It Does |
+|---|---|
+| `001_init.sql` | Creates `pgcrypto` extension. Creates `documents` table (id, content, metadata, status, chunk_count, created_at). Creates `chunks` table (id, document_id FK CASCADE, chunk_index, text, token_count, created_at). Creates `document_fingerprints` table (fingerprint PK, document_id FK CASCADE, created_at). Adds indexes on `chunks(document_id)` and `document_fingerprints(document_id)`. |
+| `002_add_file_storage.sql` | Adds `file_name TEXT`, `file_type TEXT`, `s3_key TEXT` columns to `documents`. |
+| `003_add_content_preview.sql` | Adds `content_preview TEXT` column to `documents`. Backfills existing rows with `LEFT(content, 120)`. Creates index on `LOWER(content_preview)`. |
+| `004_add_doc_type.sql` | Adds `doc_type TEXT NOT NULL DEFAULT 'candidate'` column to `documents`. Backfills from `metadata->>'doc_type'` where present. |
 
-## S3 Bucket Setup
+All migrations are idempotent (`IF NOT EXISTS` / `DO $$ ... END $$`).
 
-Create an S3 bucket matching the `S3_BUCKET` environment variable. The IAM user needs:
+## S3 Setup
 
-### Required Permissions
-- `s3:PutObject` — For file uploads to `documents/*/*/*`.
-- `s3:GetObject` — For presigned URL generation.
-- `s3:HeadBucket` — For health checks.
-- `s3:DeleteObject` — For cleanup operations (optional).
+Create an S3 bucket matching the `S3_BUCKET` environment variable (default: `ms-go-rag`).
 
-### IAM Policy Example
+### Required IAM Actions
+
+| Action | Resource | Purpose |
+|---|---|---|
+| `s3:PutObject` | `arn:aws:s3:::{bucket}/documents/*` | File uploads during ingest |
+| `s3:GetObject` | `arn:aws:s3:::{bucket}/documents/*` | Presigned URL generation for file retrieval |
+| `s3:DeleteObject` | `arn:aws:s3:::{bucket}/documents/*` | File deletion via `DELETE /documents/{doc_id}` |
+| `s3:HeadBucket` | `arn:aws:s3:::{bucket}` | Health check probe |
+
+### IAM Policy
+
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:GetObject",
-        "s3:DeleteObject"
-      ],
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
       "Resource": "arn:aws:s3:::your-bucket-name/documents/*"
     },
     {
@@ -73,16 +122,44 @@ Create an S3 bucket matching the `S3_BUCKET` environment variable. The IAM user 
 ```
 
 ### Bucket Configuration
+
 - No public access required.
 - Versioning optional (recommended for production).
-- Default encryption enabled (SSE-S3).
-- Bucket policy and CORS are not required for server-side operations. If clients download files directly via presigned URLs, ensure the bucket allows GET requests from the expected origins.
+- Default encryption (SSE-S3) recommended.
+- No bucket policy or CORS needed for server-side operations. If clients download files via presigned URLs directly, ensure the bucket allows GET from expected origins.
 
-## Health Monitoring
+## Pinecone Setup
 
-`GET /health` returns the status of all external dependencies:
+| Setting | Value |
+|---|---|
+| Index name | Must match `PINECONE_INDEX_NAME` (default: `go-ms-rag`) |
+| Dimension | `1024` (must match `EMBEDDING_DIMENSIONS`) |
+| Metric | `cosine` |
+| Type | Serverless or pod-based |
+
+The service creates namespace-scoped connections on demand. Each document gets its own namespace (namespace = document UUID). All vectors are also written to the default (empty) namespace for global queries.
+
+## First Run Verification
+
+After starting the service, verify with:
+
+```bash
+curl http://localhost:8081/health
+```
+
+Expected response:
+
 ```json
 {"status":"ok","pinecone":"ok","neon":"ok","s3":"ok"}
 ```
 
-Each probe has a 5-second timeout. A degraded status returns HTTP 503.
+Each probe has a 5-second timeout. If any probe fails, `status` becomes `"degraded"` and the response code is `503`.
+
+## Production Considerations
+
+- **S3 presigned URL TTL:** Hardcoded to 15 minutes. Clients must request a fresh URL if the previous one expires.
+- **Bedrock rate limits:** The service retries on `ThrottlingException` with exponential backoff (max 5 retries, max 30s delay). High query volume may exceed Bedrock quotas; request a quota increase for `InvokeModel` and `Converse` APIs.
+- **Named entity cache TTL:** 60 seconds. After a document is deleted, its named entity may still be cached for up to 60 seconds.
+- **Worker queue:** Single-consumer, sequential processing. If ingest throughput is a bottleneck, increase `WORKER_QUEUE_SIZE` and consider scaling horizontally.
+- **Server timeouts:** Read timeout 30s, write timeout 120s. Synthesis calls to Llama4 Maverick can take several seconds; ensure load balancer timeouts are >= 120s.
+- **Graceful shutdown:** The service listens for SIGINT/SIGTERM, shuts down the worker (waits for in-flight task), and drains HTTP connections with a 15-second deadline.
