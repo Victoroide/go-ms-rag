@@ -86,6 +86,10 @@ func (m *mockChunkStore) UpdateDocumentStatus(_ context.Context, id domain.Docum
 	return nil
 }
 
+func (m *mockChunkStore) DeleteDocument(_ context.Context, id domain.DocumentID) error {
+	delete(m.documents, string(id))
+	return nil
+}
 func (m *mockChunkStore) Ping(_ context.Context) error          { return nil }
 func (m *mockChunkStore) Close(_ context.Context) error         { return nil }
 func (m *mockChunkStore) RunMigrations(_ context.Context) error { return nil }
@@ -100,11 +104,11 @@ func (m *mockVectorStore) Upsert(_ context.Context, _ string, _ []domain.Chunk) 
 	return nil
 }
 
-func (m *mockVectorStore) Query(_ context.Context, _ string, _ []float32, _ int) ([]domain.ScoredChunk, error) {
+func (m *mockVectorStore) Query(_ context.Context, _ string, _ []float32, _ int, _ string) ([]domain.ScoredChunk, error) {
 	return nil, nil
 }
 
-func (m *mockVectorStore) QueryAllNamespaces(_ context.Context, _ []float32, _ int) ([]domain.ScoredChunk, error) {
+func (m *mockVectorStore) QueryAllNamespaces(_ context.Context, _ []float32, _ int, _ string) ([]domain.ScoredChunk, error) {
 	return nil, nil
 }
 

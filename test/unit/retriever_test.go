@@ -16,10 +16,10 @@ type mockVectorStore struct {
 }
 
 func (m *mockVectorStore) Upsert(_ context.Context, _ string, _ []domain.Chunk) error { return nil }
-func (m *mockVectorStore) Query(_ context.Context, _ string, _ []float32, _ int) ([]domain.ScoredChunk, error) {
+func (m *mockVectorStore) Query(_ context.Context, _ string, _ []float32, _ int, _ string) ([]domain.ScoredChunk, error) {
 	return m.queryResult, nil
 }
-func (m *mockVectorStore) QueryAllNamespaces(_ context.Context, _ []float32, _ int) ([]domain.ScoredChunk, error) {
+func (m *mockVectorStore) QueryAllNamespaces(_ context.Context, _ []float32, _ int, _ string) ([]domain.ScoredChunk, error) {
 	return m.queryAllResult, nil
 }
 func (m *mockVectorStore) Delete(_ context.Context, _ string, _ []string) error { return nil }
@@ -65,7 +65,7 @@ func TestGlobalModeFallback(t *testing.T) {
 		"low similarity should route to GLOBAL")
 
 	// Test actual retrieve with 0 results triggers fallback.
-	result, err := ret.Retrieve(context.Background(), "test query", retriever.RetrievalModeGlobal, "", 10)
+	result, err := ret.Retrieve(context.Background(), "test query", retriever.RetrievalModeGlobal, "", 10, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	// Even with 0 results, the fallback runs but still gets 0 from mock.
