@@ -113,13 +113,14 @@ func run() error {
 
 	// Build HTTP router.
 	router := api.NewRouter(&api.RouterDeps{
-		VectorStore: pcDriver,
-		ChunkStore:  pgClient,
-		Retriever:   ret,
-		Ambassador:  amb,
-		Config:      cfg,
-		Worker:      w,
-		S3Client:    s3Client,
+		VectorStore:    pcDriver,
+		ChunkStore:     pgClient,
+		Retriever:      ret,
+		Ambassador:     amb,
+		Config:         cfg,
+		Worker:         w,
+		S3Client:       s3Client,
+		PineconeDriver: pcDriver,
 	})
 
 	srv := &http.Server{

@@ -15,17 +15,28 @@ import (
 
 // QueryRequest is the POST /query request body.
 type QueryRequest struct {
-	Query     string `json:"query"`
-	Mode      string `json:"mode,omitempty"`
-	MaxChunks int    `json:"max_chunks,omitempty"`
+	Query         string `json:"query"`
+	Mode          string `json:"mode,omitempty"`
+	FilterDocType string `json:"filter_doc_type,omitempty"`
+	MaxChunks     int    `json:"max_chunks,omitempty"`
+}
+
+// ScoredChunkResponse is a single scored chunk in the query response.
+type ScoredChunkResponse struct {
+	DocID      string  `json:"doc_id"`
+	DocType    string  `json:"doc_type"`
+	ChunkIndex int     `json:"chunk_index"`
+	Score      float64 `json:"score"`
+	Text       string  `json:"text"`
 }
 
 // QueryResponse is the POST /query response body.
 type QueryResponse struct {
-	Answer     string            `json:"answer"`
-	Mode       string            `json:"mode"`
-	ChunksUsed int               `json:"chunks_used"`
-	TokenUsage domain.TokenUsage `json:"token_usage"`
+	Answer       string                `json:"answer"`
+	Mode         string                `json:"mode"`
+	ChunksUsed   int                   `json:"chunks_used"`
+	TokenUsage   domain.TokenUsage     `json:"token_usage"`
+	ScoredChunks []ScoredChunkResponse `json:"scored_chunks"`
 }
 
 // APIError is a structured JSON error response.
@@ -67,6 +78,7 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 			OriginalQuery: req.Query,
 			MaxChunks:     req.MaxChunks,
 			RequestedMode: req.Mode,
+			FilterDocType: req.FilterDocType,
 		}
 
 		stages := []pipeline.QueryStage{
@@ -82,11 +94,33 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 			return
 		}
 
+		scoredChunks := make([]ScoredChunkResponse, 0, len(qc.RetrievedChunks))
+		for _, sc := range qc.RetrievedChunks {
+			docType := ""
+			if sc.Chunk.Metadata != nil {
+				if dt, ok := sc.Chunk.Metadata["doc_type"]; ok {
+					docType, _ = dt.(string)
+				}
+			}
+			text := sc.Chunk.Text
+			if len(text) > 200 {
+				text = text[:200]
+			}
+			scoredChunks = append(scoredChunks, ScoredChunkResponse{
+				DocID:      string(sc.Chunk.DocumentID),
+				DocType:    docType,
+				ChunkIndex: sc.Chunk.Index,
+				Score:      sc.Score,
+				Text:       text,
+			})
+		}
+
 		resp := QueryResponse{
-			Answer:     qc.FinalAnswer,
-			Mode:       qc.RetrievalMode,
-			ChunksUsed: len(qc.RetrievedChunks),
-			TokenUsage: qc.TokenUsage,
+			Answer:       qc.FinalAnswer,
+			Mode:         qc.RetrievalMode,
+			ChunksUsed:   len(qc.RetrievedChunks),
+			TokenUsage:   qc.TokenUsage,
+			ScoredChunks: scoredChunks,
 		}
 
 		log.Printf("query: mode=%s chunks=%d duration=%s", qc.RetrievalMode, len(qc.RetrievedChunks), time.Since(start))

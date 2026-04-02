@@ -20,6 +20,7 @@ import (
 type IngestRequest struct {
 	Content  string         `json:"content"`
 	Metadata map[string]any `json:"metadata,omitempty"`
+	DocType  string         `json:"doc_type,omitempty"`
 }
 
 // IngestResponse is the POST /ingest response body.
@@ -91,6 +92,7 @@ func handleJSONIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 		DocumentID: domain.DocumentID(docID),
 		Content:    req.Content,
 		Metadata:   req.Metadata,
+		DocType:    req.DocType,
 	}
 	if !wk.Enqueue(task) {
 		writeJSONError(rw, http.StatusServiceUnavailable, "queue", "ingest queue is full")
@@ -167,6 +169,9 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 		return
 	}
 
+	// Read optional doc_type form field.
+	formDocType := r.FormValue("doc_type")
+
 	docID := uuid.New().String()
 	ftStr := string(ft)
 	fileName := header.Filename
@@ -175,10 +180,13 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 	// S3 upload is done by the worker for consistency.
 	var s3Key *string
 	if s3Client != nil {
-		// Detect doc_type for S3 key path.
-		docType := "candidate"
-		if strings.Contains(strings.ToLower(text), "job opening:") {
-			docType = "job"
+		// Use explicit doc_type or auto-detect for S3 key path.
+		docType := formDocType
+		if docType == "" {
+			docType = "candidate"
+			if strings.Contains(strings.ToLower(text), "job opening:") {
+				docType = "job"
+			}
 		}
 		key, uploadErr := s3Client.Upload(r.Context(), docID, docType, fileName, ft, bytes.NewReader(fileData))
 		if uploadErr != nil {
@@ -196,6 +204,7 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 		FileName:   &fileName,
 		FileType:   &ftStr,
 		S3Key:      s3Key,
+		DocType:    formDocType,
 	}
 	if !wk.Enqueue(task) {
 		writeJSONError(rw, http.StatusServiceUnavailable, "queue", "ingest queue is full")
