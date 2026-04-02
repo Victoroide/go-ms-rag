@@ -178,7 +178,7 @@ func (s *RetrievalStage) ID() StageID { return StageRetrieval }
 // Run retrieves chunks based on the routing decision.
 func (s *RetrievalStage) Run(ctx context.Context, qc *QueryContext) error {
 	mode := retriever.RetrievalMode(qc.RetrievalMode)
-	result, err := s.ret.Retrieve(ctx, qc.OriginalQuery, mode, "", qc.MaxChunks)
+	result, err := s.ret.Retrieve(ctx, qc.OriginalQuery, mode, "", qc.MaxChunks, qc.FilterDocType)
 	if err != nil {
 		return fmt.Errorf("retrieval_stage: %w", err)
 	}

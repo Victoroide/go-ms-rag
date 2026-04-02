@@ -54,7 +54,7 @@ type Result struct {
 }
 
 // Retrieve executes the retrieval pipeline based on the determined mode.
-func (r *Retriever) Retrieve(ctx context.Context, query string, mode RetrievalMode, namespace string, topK int) (*Result, error) {
+func (r *Retriever) Retrieve(ctx context.Context, query string, mode RetrievalMode, namespace string, topK int, docTypeFilter string) (*Result, error) {
 	if topK <= 0 {
 		topK = r.topK
 	}
@@ -68,11 +68,11 @@ func (r *Retriever) Retrieve(ctx context.Context, query string, mode RetrievalMo
 
 	switch mode {
 	case RetrievalModeLocal:
-		chunks, err = r.retrieveLocal(ctx, namespace, embedding, topK)
+		chunks, err = r.retrieveLocal(ctx, namespace, embedding, topK, docTypeFilter)
 	case RetrievalModeGlobal:
-		chunks, err = r.retrieveGlobal(ctx, embedding, topK)
+		chunks, err = r.retrieveGlobal(ctx, embedding, topK, docTypeFilter)
 	default:
-		chunks, err = r.retrieveGlobal(ctx, embedding, topK)
+		chunks, err = r.retrieveGlobal(ctx, embedding, topK, docTypeFilter)
 	}
 	if err != nil {
 		return nil, err
@@ -81,7 +81,7 @@ func (r *Retriever) Retrieve(ctx context.Context, query string, mode RetrievalMo
 	// Fallback: if GLOBAL returns < 3 chunks, run unrestricted search.
 	if mode == RetrievalModeGlobal && len(chunks) < fallbackMinChunks {
 		log.Printf("retrieval: GLOBAL returned %d chunks (< %d), running fallback", len(chunks), fallbackMinChunks)
-		fallbackChunks, fbErr := r.vectorStore.QueryAllNamespaces(ctx, embedding, defaultSimilarityLimit)
+		fallbackChunks, fbErr := r.vectorStore.QueryAllNamespaces(ctx, embedding, defaultSimilarityLimit, docTypeFilter)
 		if fbErr == nil && len(fallbackChunks) > 0 {
 			existing := make(map[domain.ChunkID]bool)
 			for _, c := range chunks {
@@ -167,7 +167,7 @@ func (r *Retriever) EmbedQuery(ctx context.Context, query string) (embedding []f
 	}
 
 	// Get top similarity from global search to help with routing.
-	scored, qErr := r.vectorStore.QueryAllNamespaces(ctx, embedding, 1)
+	scored, qErr := r.vectorStore.QueryAllNamespaces(ctx, embedding, 1, "")
 	if qErr != nil {
 		return embedding, 0, nil
 	}
@@ -177,20 +177,20 @@ func (r *Retriever) EmbedQuery(ctx context.Context, query string) (embedding []f
 	return embedding, topScore, nil
 }
 
-func (r *Retriever) retrieveLocal(ctx context.Context, namespace string, embedding []float32, topK int) ([]domain.ScoredChunk, error) {
+func (r *Retriever) retrieveLocal(ctx context.Context, namespace string, embedding []float32, topK int, docTypeFilter string) ([]domain.ScoredChunk, error) {
 	if namespace == "" {
 		// If no namespace, fall back to global.
-		return r.retrieveGlobal(ctx, embedding, topK)
+		return r.retrieveGlobal(ctx, embedding, topK, docTypeFilter)
 	}
-	chunks, err := r.vectorStore.Query(ctx, namespace, embedding, topK)
+	chunks, err := r.vectorStore.Query(ctx, namespace, embedding, topK, docTypeFilter)
 	if err != nil {
 		return nil, fmt.Errorf("retriever: local query namespace %q: %w", namespace, err)
 	}
 	return chunks, nil
 }
 
-func (r *Retriever) retrieveGlobal(ctx context.Context, embedding []float32, topK int) ([]domain.ScoredChunk, error) {
-	chunks, err := r.vectorStore.QueryAllNamespaces(ctx, embedding, topK)
+func (r *Retriever) retrieveGlobal(ctx context.Context, embedding []float32, topK int, docTypeFilter string) ([]domain.ScoredChunk, error) {
+	chunks, err := r.vectorStore.QueryAllNamespaces(ctx, embedding, topK, docTypeFilter)
 	if err != nil {
 		return nil, fmt.Errorf("retriever: global query: %w", err)
 	}

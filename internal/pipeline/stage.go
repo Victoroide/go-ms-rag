@@ -39,6 +39,7 @@ type IngestContext struct {
 	FileName   *string
 	FileType   *string
 	S3Key      *string
+	DocType    string
 }
 
 // NewIngestContext creates an initialized IngestContext.
@@ -57,6 +58,7 @@ type QueryContext struct {
 	SubQueries    []string
 	MaxChunks     int
 	RequestedMode string
+	FilterDocType string
 
 	// Populated by decomposition stage.
 	NamedEntity string

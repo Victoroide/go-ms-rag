@@ -20,6 +20,7 @@ type IngestTask struct {
 	FileName   *string
 	FileType   *string
 	S3Key      *string
+	DocType    string
 }
 
 // Worker processes ingest tasks from a buffered channel queue.
@@ -114,6 +115,7 @@ func (w *Worker) processTask(ctx context.Context, task IngestTask) {
 	ic.FileName = task.FileName
 	ic.FileType = task.FileType
 	ic.S3Key = task.S3Key
+	ic.DocType = task.DocType
 	_, err = pipeline.RunIngestionPipeline(ctx, ic, w.stages)
 	if err != nil {
 		log.Printf("worker: ingest failed for document %s: %v", task.DocumentID, err)

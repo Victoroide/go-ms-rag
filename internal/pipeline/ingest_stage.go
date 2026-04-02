@@ -85,8 +85,11 @@ func detectDocType(content string) string {
 // Run persists chunks to both Pinecone and Postgres.
 // Order: 1) Upsert vectors to Pinecone, 2) Save metadata to Postgres.
 func (s *PersistStage) Run(ctx context.Context, ic *IngestContext) error {
-	// Detect doc_type and inject into metadata for all chunks.
-	docType := detectDocType(ic.RawText)
+	// Use explicit doc_type if provided, otherwise auto-detect.
+	docType := ic.DocType
+	if docType == "" {
+		docType = detectDocType(ic.RawText)
+	}
 	if ic.Metadata == nil {
 		ic.Metadata = make(map[string]any)
 	}
