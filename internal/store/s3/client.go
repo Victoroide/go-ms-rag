@@ -87,6 +87,19 @@ func (c *Client) PresignGet(ctx context.Context, s3Key string) (string, error) {
 	return req.URL, nil
 }
 
+// Delete removes an object from S3 by key.
+func (c *Client) Delete(ctx context.Context, s3Key string) error {
+	_, err := c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: &c.bucket,
+		Key:    &s3Key,
+	})
+	if err != nil {
+		return fmt.Errorf("s3: delete %s: %w", s3Key, err)
+	}
+	log.Printf("s3: deleted %s", s3Key)
+	return nil
+}
+
 // Ping verifies bucket access by issuing a HeadBucket call.
 func (c *Client) Ping(ctx context.Context) error {
 	_, err := c.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{

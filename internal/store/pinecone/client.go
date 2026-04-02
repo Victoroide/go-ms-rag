@@ -115,17 +115,25 @@ func (p *PineconeClient) Upsert(ctx context.Context, namespace string, chunks []
 }
 
 // Query searches for similar vectors in the specified namespace.
-func (p *PineconeClient) Query(ctx context.Context, namespace string, embedding []float32, topK int) ([]domain.ScoredChunk, error) {
+func (p *PineconeClient) Query(ctx context.Context, namespace string, embedding []float32, topK int, docTypeFilter string) ([]domain.ScoredChunk, error) {
 	idxConn, err := p.conn(namespace)
 	if err != nil {
 		return nil, err
 	}
 	topKU32 := uint32(topK)
-	res, err := idxConn.QueryByVectorValues(ctx, &pinecone.QueryByVectorValuesRequest{
+	req := &pinecone.QueryByVectorValuesRequest{
 		Vector:          embedding,
 		TopK:            topKU32,
 		IncludeMetadata: true,
-	})
+	}
+	if docTypeFilter != "" {
+		req.MetadataFilter = &structpb.Struct{
+			Fields: map[string]*structpb.Value{
+				"doc_type": structpb.NewStringValue(docTypeFilter),
+			},
+		}
+	}
+	res, err := idxConn.QueryByVectorValues(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("pinecone: query namespace %q: %w", namespace, err)
 	}
@@ -135,17 +143,25 @@ func (p *PineconeClient) Query(ctx context.Context, namespace string, embedding 
 
 // QueryAllNamespaces queries the default namespace (empty string) which
 // contains all vectors when using the dual-write strategy.
-func (p *PineconeClient) QueryAllNamespaces(ctx context.Context, embedding []float32, topK int) ([]domain.ScoredChunk, error) {
+func (p *PineconeClient) QueryAllNamespaces(ctx context.Context, embedding []float32, topK int, docTypeFilter string) ([]domain.ScoredChunk, error) {
 	idxConn, err := p.conn("")
 	if err != nil {
 		return nil, err
 	}
 	topKU32 := uint32(topK)
-	res, err := idxConn.QueryByVectorValues(ctx, &pinecone.QueryByVectorValuesRequest{
+	req := &pinecone.QueryByVectorValuesRequest{
 		Vector:          embedding,
 		TopK:            topKU32,
 		IncludeMetadata: true,
-	})
+	}
+	if docTypeFilter != "" {
+		req.MetadataFilter = &structpb.Struct{
+			Fields: map[string]*structpb.Value{
+				"doc_type": structpb.NewStringValue(docTypeFilter),
+			},
+		}
+	}
+	res, err := idxConn.QueryByVectorValues(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("pinecone: query all namespaces: %w", err)
 	}
@@ -169,41 +185,49 @@ func (p *PineconeClient) Delete(ctx context.Context, namespace string, ids []str
 	return nil
 }
 
-// DeleteAllVectorsInNamespace deletes all vectors from the specified namespace.
+// DeleteAllVectorsInNamespace deletes all vectors from the specified namespace
+// using the SDK's native delete-all call (no query required).
 func (p *PineconeClient) DeleteAllVectorsInNamespace(ctx context.Context, namespace string) error {
 	idxConn, err := p.conn(namespace)
 	if err != nil {
 		return err
 	}
 
-	// First, query to get all vector IDs in the namespace
-	res, err := idxConn.QueryByVectorValues(ctx, &pinecone.QueryByVectorValuesRequest{
-		TopK:            10000, // Fetch up to 10k vectors
-		IncludeValues:   false,
-		IncludeMetadata: false,
-	})
-	if err != nil {
-		return fmt.Errorf("pinecone: query vectors in namespace %q: %w", namespace, err)
+	if err := idxConn.DeleteAllVectorsInNamespace(ctx); err != nil {
+		return fmt.Errorf("pinecone: delete all vectors in namespace %q: %w", namespace, err)
 	}
-
-	// If no vectors found, we're done
-	if len(res.Matches) == 0 {
-		return nil
-	}
-
-	// Collect all vector IDs
-	var ids []string
-	for _, match := range res.Matches {
-		ids = append(ids, match.Vector.Id)
-	}
-
-	// Delete all vectors by ID
-	err = idxConn.DeleteVectorsById(ctx, ids)
-	if err != nil {
-		return fmt.Errorf("pinecone: delete %d vectors from namespace %q: %w", len(ids), namespace, err)
-	}
-
+	log.Printf("pinecone: deleted all vectors in namespace %q", namespace)
 	return nil
+}
+
+// DeleteByDocID deletes vectors from the default namespace whose metadata doc_id matches,
+// using the SDK's native DeleteVectorsByFilter (no dummy query needed).
+func (p *PineconeClient) DeleteByDocID(ctx context.Context, docID string) error {
+	idxConn, err := p.conn("")
+	if err != nil {
+		return err
+	}
+
+	filter := &structpb.Struct{
+		Fields: map[string]*structpb.Value{
+			"doc_id": structpb.NewStringValue(docID),
+		},
+	}
+
+	if err := idxConn.DeleteVectorsByFilter(ctx, filter); err != nil {
+		return fmt.Errorf("pinecone: delete vectors by doc_id %s: %w", docID, err)
+	}
+	log.Printf("pinecone: deleted vectors from default namespace for doc_id=%s", docID)
+	return nil
+}
+
+// DescribeIndexStats returns index-level statistics including per-namespace vector counts.
+func (p *PineconeClient) DescribeIndexStats(ctx context.Context) (*pinecone.DescribeIndexStatsResponse, error) {
+	idxConn, err := p.conn("")
+	if err != nil {
+		return nil, err
+	}
+	return idxConn.DescribeIndexStats(ctx)
 }
 
 // Ping verifies connectivity to the Pinecone index.
@@ -234,6 +258,9 @@ func matchesToScoredChunks(matches []*pinecone.ScoredVector, namespace string) [
 			}
 			if v, ok := fields["token_count"]; ok {
 				chunk.TokenCount = int(v.GetNumberValue())
+			}
+			if v, ok := fields["doc_type"]; ok {
+				chunk.Metadata = map[string]any{"doc_type": v.GetStringValue()}
 			}
 		}
 		scored = append(scored, domain.ScoredChunk{

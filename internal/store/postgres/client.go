@@ -23,6 +23,9 @@ var migration002SQL string
 //go:embed migrations/003_add_content_preview.sql
 var migration003SQL string
 
+//go:embed migrations/004_add_doc_type.sql
+var migration004SQL string
+
 // Client manages the PostgreSQL connection pool and provides
 // chunk metadata and document fingerprint operations.
 type Client struct {
@@ -59,7 +62,10 @@ func (c *Client) runMigrations(ctx context.Context) error {
 	if _, err := c.Pool.Exec(ctx, migration002SQL); err != nil {
 		return err
 	}
-	_, err := c.Pool.Exec(ctx, migration003SQL)
+	if _, err := c.Pool.Exec(ctx, migration003SQL); err != nil {
+		return err
+	}
+	_, err := c.Pool.Exec(ctx, migration004SQL)
 	return err
 }
 
@@ -69,11 +75,20 @@ func (c *Client) InsertDocument(ctx context.Context, doc domain.Document) error 
 	if err != nil {
 		metadataJSON = []byte("{}")
 	}
+	// Extract doc_type from metadata for the dedicated column.
+	docType := "candidate"
+	if doc.Metadata != nil {
+		if dt, ok := doc.Metadata["doc_type"]; ok {
+			if s, ok := dt.(string); ok && s != "" {
+				docType = s
+			}
+		}
+	}
 	_, err = c.Pool.Exec(ctx,
-		`INSERT INTO documents (id, content, content_preview, metadata, chunk_count, file_name, file_type, s3_key)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		 ON CONFLICT (id) DO UPDATE SET content = $2, content_preview = $3, metadata = $4, chunk_count = $5, file_name = $6, file_type = $7, s3_key = $8`,
-		string(doc.ID), doc.Content, doc.ContentPreview, metadataJSON, doc.ChunkCount, doc.FileName, doc.FileType, doc.S3Key,
+		`INSERT INTO documents (id, content, content_preview, metadata, chunk_count, file_name, file_type, s3_key, doc_type)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		 ON CONFLICT (id) DO UPDATE SET content = $2, content_preview = $3, metadata = $4, chunk_count = $5, file_name = $6, file_type = $7, s3_key = $8, doc_type = $9`,
+		string(doc.ID), doc.Content, doc.ContentPreview, metadataJSON, doc.ChunkCount, doc.FileName, doc.FileType, doc.S3Key, docType,
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: insert document %s: %w", doc.ID, err)
@@ -115,10 +130,13 @@ func (c *Client) GetDocument(ctx context.Context, id domain.DocumentID) (*domain
 	var docID string
 	var metadataJSON []byte
 	err := c.Pool.QueryRow(ctx,
-		`SELECT id, content, metadata, chunk_count FROM documents WHERE id = $1`,
+		`SELECT id, content, metadata, chunk_count, s3_key FROM documents WHERE id = $1`,
 		string(id),
-	).Scan(&docID, &doc.Content, &metadataJSON, &doc.ChunkCount)
+	).Scan(&docID, &doc.Content, &metadataJSON, &doc.ChunkCount, &doc.S3Key)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("postgres: get document %s: %w", id, err)
 	}
 	doc.ID = domain.DocumentID(docID)
@@ -142,6 +160,15 @@ func (c *Client) GetDocumentS3Key(ctx context.Context, id domain.DocumentID) (*s
 		return nil, fmt.Errorf("postgres: get document s3 key %s: %w", id, err)
 	}
 	return s3Key, nil
+}
+
+// DeleteDocument deletes a document by ID. Chunks and fingerprints cascade via FK.
+func (c *Client) DeleteDocument(ctx context.Context, id domain.DocumentID) error {
+	_, err := c.Pool.Exec(ctx, `DELETE FROM documents WHERE id = $1`, string(id))
+	if err != nil {
+		return fmt.Errorf("postgres: delete document %s: %w", id, err)
+	}
+	return nil
 }
 
 // CheckFingerprint checks whether a document fingerprint already exists.
