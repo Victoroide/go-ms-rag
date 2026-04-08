@@ -84,7 +84,7 @@ func run() error {
 				log.Printf("  WARNING: postgres delete batch %d: %v", i, err)
 			}
 		}
-		results.Close()
+		_ = results.Close()
 		conn.Release()
 
 		log.Printf("  Deleted from Postgres")

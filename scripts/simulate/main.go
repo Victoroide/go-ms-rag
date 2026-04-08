@@ -102,7 +102,7 @@ func doRequest(method, path string, body interface{}) (*http.Response, []byte, e
 	if err != nil {
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return resp, nil, err
@@ -703,7 +703,7 @@ func scenario13() {
 		printScenario(13, "Invalid file type rejection", "POST", "/ingest", nil, 0, nil, false, fmt.Sprintf("request error: %v", err))
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 
 	ok := resp.StatusCode == 415

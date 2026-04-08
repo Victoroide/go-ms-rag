@@ -68,7 +68,7 @@ func CleanupDocument(ctx context.Context, cfg *config.Config, docID string) erro
 			log.Printf("  WARNING: postgres delete batch %d: %v", i, err)
 		}
 	}
-	results.Close()
+	_ = results.Close()
 
 	log.Printf("  Deleted from Postgres")
 	return nil

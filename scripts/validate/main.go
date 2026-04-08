@@ -65,7 +65,7 @@ func main() {
 		}
 
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		var result queryResponse
 		if err := json.Unmarshal(body, &result); err != nil {
