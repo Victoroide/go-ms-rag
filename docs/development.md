@@ -69,7 +69,7 @@ Requires a running server (via Docker Compose or local). Covers:
 golangci-lint run --config=.golangci.yml
 ```
 
-The `.golangci.yml` configuration enables linters including `govet`, `staticcheck`, `errcheck`, `gosimple`, `ineffassign`, `unused`, `typecheck`, and `gocritic`. Test files in `test/` and `scripts/` are included in the lint scope.
+The `.golangci.yml` configuration enables linters including `govet`, `staticcheck`, `errcheck`, `gosimple`, `ineffassign`, `unused`, `gocritic`, `misspell`, `gofmt`, and `goimports`. Test files in `test/` and `scripts/` are included in the lint scope.
 
 ## Build Gate
 
