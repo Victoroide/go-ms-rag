@@ -2,17 +2,11 @@ package domain
 
 import (
 	"context"
-	"io"
 )
 
 // EmbeddingProvider generates vector embeddings from text.
 type EmbeddingProvider interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
-}
-
-// LLMProvider sends prompts to a language model and returns text responses.
-type LLMProvider interface {
-	Generate(ctx context.Context, prompt string, maxTokens int) (string, error)
 }
 
 // VectorStore manages vector embeddings in an external vector database.
@@ -37,12 +31,4 @@ type ChunkStore interface {
 	DeleteDocument(ctx context.Context, id DocumentID) error
 	Close(ctx context.Context) error
 	RunMigrations(ctx context.Context) error
-}
-
-// FileStore manages file storage in an object store (e.g. S3).
-type FileStore interface {
-	Upload(ctx context.Context, docID, docType, filename string, ft string, r io.Reader) (string, error)
-	PresignGet(ctx context.Context, s3Key string) (string, error)
-	Delete(ctx context.Context, s3Key string) error
-	Ping(ctx context.Context) error
 }

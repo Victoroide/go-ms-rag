@@ -31,15 +31,6 @@ type Document struct {
 	S3Key          *string        `json:"s3_key,omitempty"`
 }
 
-// QueryResult holds the final output of a retrieval-augmented query.
-type QueryResult struct {
-	Answer     string     `json:"answer"`
-	Mode       string     `json:"mode"`
-	ChunksUsed int        `json:"chunks_used"`
-	TokenUsage TokenUsage `json:"token_usage"`
-	Chunks     []Chunk    `json:"chunks,omitempty"`
-}
-
 // TokenUsage tracks token consumption from Bedrock calls.
 type TokenUsage struct {
 	InputTokens  int32 `json:"input_tokens"`
