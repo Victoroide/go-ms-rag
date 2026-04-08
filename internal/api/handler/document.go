@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
 
 	"github.com/Victoroide/go-ms-rag/internal/domain"
 	pcstore "github.com/Victoroide/go-ms-rag/internal/store/pinecone"
@@ -21,13 +20,7 @@ type DeleteResponse struct {
 // DeleteHandler returns an HTTP handler for DELETE /documents/{doc_id}.
 func DeleteHandler(cs domain.ChunkStore, pcDriver *pcstore.Driver, s3Client *s3store.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Extract doc_id from path: /documents/{doc_id}
-		pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-		if len(pathParts) < 2 {
-			writeJSONError(w, http.StatusBadRequest, "validation", "invalid path")
-			return
-		}
-		docIDStr := pathParts[1]
+		docIDStr := r.PathValue("doc_id")
 
 		if _, err := uuid.Parse(docIDStr); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation", "doc_id must be a valid UUID")

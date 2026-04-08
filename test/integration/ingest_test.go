@@ -319,25 +319,27 @@ func TestGetDocumentFileNoS3Key(t *testing.T) {
 		ID: "550e8400-e29b-41d4-a716-446655440000",
 	}
 
-	h := handler.FileHandler(cs, nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /documents/{doc_id}/file", handler.FileHandler(cs, nil))
 	req := httptest.NewRequest(http.MethodGet, "/documents/550e8400-e29b-41d4-a716-446655440000/file", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	h.ServeHTTP(rec, req)
+	mux.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	var errResp handler.APIError
 	_ = json.NewDecoder(rec.Body).Decode(&errResp)
-	assert.Contains(t, errResp.Message, "no file stored")
+	assert.Contains(t, errResp.Message, "file storage is not configured")
 }
 
 func TestGetDocumentFileInvalidUUID(t *testing.T) {
 	cs := newMockChunkStore()
-	h := handler.FileHandler(cs, nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /documents/{doc_id}/file", handler.FileHandler(cs, nil))
 	req := httptest.NewRequest(http.MethodGet, "/documents/not-a-uuid/file", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	h.ServeHTTP(rec, req)
+	mux.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
 
 	"github.com/Victoroide/go-ms-rag/internal/domain"
 	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
@@ -20,16 +19,15 @@ type FileResponse struct {
 // FileHandler returns an HTTP handler for GET /documents/{doc_id}/file.
 func FileHandler(cs domain.ChunkStore, s3Client *s3store.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Extract doc_id from path: /documents/{doc_id}/file
-		pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-		if len(pathParts) < 3 {
-			writeJSONError(w, http.StatusBadRequest, "validation", "invalid path")
-			return
-		}
-		docIDStr := pathParts[1]
+		docIDStr := r.PathValue("doc_id")
 
 		if _, err := uuid.Parse(docIDStr); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation", "doc_id must be a valid UUID")
+			return
+		}
+
+		if s3Client == nil {
+			writeJSONError(w, http.StatusNotFound, "not_found", "file storage is not configured")
 			return
 		}
 
