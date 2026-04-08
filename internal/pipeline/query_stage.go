@@ -12,11 +12,11 @@ import (
 	"github.com/Victoroide/go-ms-rag/internal/llm"
 	"github.com/Victoroide/go-ms-rag/internal/retriever"
 	brtypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
 	queryDecompositionMaxOutput = 1024
-	subQueryAnswerMaxOutput     = 2048
 	answerSynthesisMaxOutput    = 4096
 )
 
@@ -24,11 +24,12 @@ const (
 type DecomposeStage struct {
 	ambassador *llm.Ambassador
 	cfg        *config.Config
+	pool       *pgxpool.Pool
 }
 
 // NewDecomposeStage creates a DecomposeStage.
-func NewDecomposeStage(amb *llm.Ambassador, cfg *config.Config) *DecomposeStage {
-	return &DecomposeStage{ambassador: amb, cfg: cfg}
+func NewDecomposeStage(amb *llm.Ambassador, cfg *config.Config, pool *pgxpool.Pool) *DecomposeStage {
+	return &DecomposeStage{ambassador: amb, cfg: cfg, pool: pool}
 }
 
 // ID returns the stage identifier.
@@ -41,7 +42,7 @@ func (s *DecomposeStage) Run(ctx context.Context, qc *QueryContext) error {
 	// Check if query mentions a known named entity from DB.
 	// We record the entity but always let the LLM decompose — the LLM
 	// is authoritative for deciding single-entity vs multi-entity queries.
-	namedEntities, err := FetchNamedEntitiesFromDB(ctx, s.cfg)
+	namedEntities, err := FetchNamedEntitiesFromDB(ctx, s.pool)
 	if err != nil {
 		log.Printf("WARNING: failed to fetch named entities: %v", err)
 	} else {

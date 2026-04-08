@@ -9,8 +9,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/Victoroide/go-ms-rag/internal/config"
-	"github.com/Victoroide/go-ms-rag/internal/store/postgres"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // stopWords are common English words that should not be treated as named entities
@@ -114,7 +113,7 @@ var globalEntityCache = &entityCache{
 
 // FetchNamedEntitiesFromDB retrieves all named entities from document previews
 // Uses a 60-second TTL cache to avoid database round-trips on every query
-func FetchNamedEntitiesFromDB(ctx context.Context, cfg *config.Config) (map[string]bool, error) {
+func FetchNamedEntitiesFromDB(ctx context.Context, pool *pgxpool.Pool) (map[string]bool, error) {
 	// Check cache first
 	globalEntityCache.mu.RLock()
 	if time.Since(globalEntityCache.fetchedAt) < globalEntityCache.ttl && len(globalEntityCache.entities) > 0 {
@@ -128,14 +127,8 @@ func FetchNamedEntitiesFromDB(ctx context.Context, cfg *config.Config) (map[stri
 	}
 	globalEntityCache.mu.RUnlock()
 
-	// Cache miss - fetch from database
-	pgClient, err := postgres.NewClient(ctx, cfg.DatabaseURL)
-	if err != nil {
-		return nil, fmt.Errorf("postgres connect: %w", err)
-	}
-	defer pgClient.Close(ctx)
-
-	rows, err := pgClient.Pool.Query(ctx, "SELECT content_preview FROM documents WHERE content_preview IS NOT NULL")
+	// Cache miss - fetch from database using the existing pool
+	rows, err := pool.Query(ctx, "SELECT content_preview FROM documents WHERE content_preview IS NOT NULL")
 	if err != nil {
 		return nil, fmt.Errorf("query previews: %w", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/Victoroide/go-ms-rag/internal/llm"
 	"github.com/Victoroide/go-ms-rag/internal/pipeline"
 	"github.com/Victoroide/go-ms-rag/internal/retriever"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // QueryRequest is the POST /query request body.
@@ -56,7 +57,7 @@ func validateQueryRequest(req *QueryRequest) *APIError {
 }
 
 // QueryHandler returns an HTTP handler for POST /query.
-func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Config) http.HandlerFunc {
+func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Config, pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Content-Type") != "application/json" {
 			writeJSONError(w, http.StatusUnsupportedMediaType, "validation", "Content-Type must be application/json")
@@ -82,7 +83,7 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 		}
 
 		stages := []pipeline.QueryStage{
-			pipeline.NewDecomposeStage(amb, cfg),
+			pipeline.NewDecomposeStage(amb, cfg, pool),
 			pipeline.NewRoutingStage(ret, cfg),
 			pipeline.NewRetrievalStage(ret),
 			pipeline.NewSynthesisStage(amb, cfg),

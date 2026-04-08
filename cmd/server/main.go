@@ -49,7 +49,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("startup: neon: %w", err)
 	}
-	defer pgClient.Close(ctx)
+	defer func() { _ = pgClient.Close(ctx) }()
 
 	if migErr := pgClient.RunMigrations(ctx); migErr != nil {
 		return fmt.Errorf("startup: migrations: %w", migErr)
@@ -121,6 +121,7 @@ func run() error {
 		Worker:         w,
 		S3Client:       s3Client,
 		PineconeDriver: pcDriver,
+		PGPool:         pgClient.Pool,
 	})
 
 	srv := &http.Server{
@@ -135,13 +136,13 @@ func run() error {
 	go func() {
 		sig := <-sigCh
 		log.Printf("received signal %s, shutting down", sig)
-		cancel()
-		w.Shutdown()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer shutdownCancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("server shutdown: %v", err)
 		}
+		cancel()
+		w.Shutdown()
 	}()
 
 	log.Printf("starting server on :%s", cfg.ServerPort)

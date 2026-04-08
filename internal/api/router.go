@@ -13,6 +13,7 @@ import (
 	pcstore "github.com/Victoroide/go-ms-rag/internal/store/pinecone"
 	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
 	"github.com/Victoroide/go-ms-rag/internal/worker"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // RouterDeps groups the dependencies required to construct the HTTP router.
@@ -25,6 +26,7 @@ type RouterDeps struct {
 	Worker         *worker.Worker
 	S3Client       *s3store.Client
 	PineconeDriver *pcstore.Driver
+	PGPool         *pgxpool.Pool
 }
 
 // NewRouter wires all HTTP routes, handlers, and middleware.
@@ -32,7 +34,7 @@ func NewRouter(deps *RouterDeps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handler.HealthHandler(deps.VectorStore, deps.ChunkStore, deps.Ambassador, deps.S3Client))
 	mux.HandleFunc("POST /ingest", handler.IngestHandler(deps.Worker, deps.ChunkStore, deps.S3Client, deps.Config.MaxUploadBytes))
-	mux.HandleFunc("POST /query", handler.QueryHandler(deps.Retriever, deps.Ambassador, deps.Config))
+	mux.HandleFunc("POST /query", handler.QueryHandler(deps.Retriever, deps.Ambassador, deps.Config, deps.PGPool))
 	mux.HandleFunc("GET /documents/{doc_id}/file", handler.FileHandler(deps.ChunkStore, deps.S3Client))
 	mux.HandleFunc("DELETE /documents/{doc_id}", handler.DeleteHandler(deps.ChunkStore, deps.PineconeDriver, deps.S3Client))
 	var h http.Handler = mux
