@@ -17,10 +17,17 @@ import (
 )
 
 // IngestRequest is the POST /ingest request body.
+//
+// DocumentID is optional. When the caller supplies a valid UUID it becomes
+// the persisted document identity (Pinecone namespace + metadata doc_id +
+// Postgres documents.id). This lets upstream systems — e.g. ficct-jobs
+// backend — keep their own primary key as the canonical reference. If
+// omitted or malformed, a fresh UUID is generated server side as before.
 type IngestRequest struct {
-	Content  string         `json:"content"`
-	Metadata map[string]any `json:"metadata,omitempty"`
-	DocType  string         `json:"doc_type,omitempty"`
+	DocumentID string         `json:"document_id,omitempty"`
+	Content    string         `json:"content"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
+	DocType    string         `json:"doc_type,omitempty"`
 }
 
 // IngestResponse is the POST /ingest response body.
@@ -37,6 +44,19 @@ func validateIngestRequest(req *IngestRequest) *APIError {
 		return &APIError{Error: "validation", Message: "content exceeds maximum length of 1000000 characters"}
 	}
 	return nil
+}
+
+// resolveDocumentID returns the caller's UUID when supplied and valid;
+// otherwise a freshly generated one. This preserves callers that don't
+// send an id while letting upstream systems carry their own primary key
+// through Pinecone/Postgres.
+func resolveDocumentID(supplied string) string {
+	if supplied != "" {
+		if parsed, err := uuid.Parse(supplied); err == nil {
+			return parsed.String()
+		}
+	}
+	return uuid.New().String()
 }
 
 // IngestHandler returns an HTTP handler for POST /ingest.
@@ -87,7 +107,7 @@ func handleJSONIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 		return
 	}
 
-	docID := uuid.New().String()
+	docID := resolveDocumentID(req.DocumentID)
 	task := worker.IngestTask{
 		DocumentID: domain.DocumentID(docID),
 		Content:    req.Content,
