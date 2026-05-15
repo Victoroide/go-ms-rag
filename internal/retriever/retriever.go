@@ -54,16 +54,27 @@ type Result struct {
 }
 
 // Retrieve executes the retrieval pipeline based on the determined mode.
+//
+// If the caller already produced an embedding for the query (e.g. the
+// routing stage), it can be passed via RetrieveWithEmbedding to avoid
+// a redundant Bedrock embed call. This wrapper keeps the original
+// signature and embeds on demand.
 func (r *Retriever) Retrieve(ctx context.Context, query string, mode RetrievalMode, namespace string, topK int, docTypeFilter string) (*Result, error) {
-	if topK <= 0 {
-		topK = r.topK
-	}
-
 	embedding, err := r.embedder.Embed(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("retriever: embed query: %w", err)
 	}
+	return r.RetrieveWithEmbedding(ctx, embedding, mode, namespace, topK, docTypeFilter)
+}
 
+// RetrieveWithEmbedding runs the retrieval pipeline against a caller-
+// supplied query embedding. Used by the query stage chain to avoid
+// embedding the same text twice (once in routing, once here).
+func (r *Retriever) RetrieveWithEmbedding(ctx context.Context, embedding []float32, mode RetrievalMode, namespace string, topK int, docTypeFilter string) (*Result, error) {
+	if topK <= 0 {
+		topK = r.topK
+	}
+	var err error
 	var chunks []domain.ScoredChunk
 
 	switch mode {

@@ -26,6 +26,7 @@ type Converser interface {
 type ModelConverser interface {
 	Converser
 	ConverseWithModel(ctx context.Context, modelID string, messages []brtypes.Message, temperature float32, maxTokens int) (*bedrockruntime.ConverseOutput, error)
+	ConverseWithModelAndSystem(ctx context.Context, modelID, systemPrompt string, messages []brtypes.Message, temperature float32, maxTokens int) (*bedrockruntime.ConverseOutput, error)
 }
 
 // Client wraps the AWS Bedrock Runtime client.
@@ -81,6 +82,15 @@ func (c *Client) Converse(ctx context.Context, messages []brtypes.Message) (*bed
 
 // ConverseWithModel sends a synchronous Converse API call to the specified model.
 func (c *Client) ConverseWithModel(ctx context.Context, modelID string, messages []brtypes.Message, temperature float32, maxTokens int) (*bedrockruntime.ConverseOutput, error) {
+	return c.ConverseWithModelAndSystem(ctx, modelID, "", messages, temperature, maxTokens)
+}
+
+// ConverseWithModelAndSystem is like ConverseWithModel but also accepts a
+// system prompt routed through the Converse API's dedicated System field.
+// This is the reliable way to enforce hard rules (language, format) across
+// providers without polluting the user message and is far stronger than an
+// in-prompt instruction at the bottom of a long context.
+func (c *Client) ConverseWithModelAndSystem(ctx context.Context, modelID, systemPrompt string, messages []brtypes.Message, temperature float32, maxTokens int) (*bedrockruntime.ConverseOutput, error) {
 	topP := extractionTopP
 	maxToks := int32(maxTokens)
 	if maxToks <= 0 {
@@ -94,6 +104,11 @@ func (c *Client) ConverseWithModel(ctx context.Context, modelID string, messages
 			TopP:        &topP,
 			MaxTokens:   &maxToks,
 		},
+	}
+	if systemPrompt != "" {
+		input.System = []brtypes.SystemContentBlock{
+			&brtypes.SystemContentBlockMemberText{Value: systemPrompt},
+		}
 	}
 	output, err := c.rt.Converse(ctx, input)
 	if err != nil {

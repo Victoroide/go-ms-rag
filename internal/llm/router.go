@@ -37,6 +37,12 @@ type RoutingRequest struct {
 	ContextTokens  int
 	PreviousFailed bool
 	FailureReason  FailureReason
+
+	// MultiNeed signals that the query asks for aggregation, comparison
+	// or listing across multiple entities. Used by the "hybrid"
+	// synthesis model selector to send complex queries to the larger
+	// model while routing simple lookups to the faster primary.
+	MultiNeed bool
 }
 
 // Route selects the model ID for a given request based on the routing
@@ -56,10 +62,31 @@ func Route(cfg *config.Config, req RoutingRequest) (modelID, reason string) {
 		return cfg.BedrockFallbackModel, "context_limit"
 	}
 
-	// Rule 2: Synthesis always uses the fallback model (Llama4 Maverick).
+	// Rule 2: Synthesis model selection. Three modes:
+	//   "fallback" (default) -> Llama 4 Maverick: best quality for
+	//       aggregation/comparison, higher TTFT.
+	//   "primary"            -> Nova Micro: lowest TTFT, terser output,
+	//       weaker on multi-chunk aggregation.
+	//   "hybrid"             -> Nova Micro for single-need queries
+	//       (cheap fast lookups), Llama 4 for multi-need ones. The
+	//       caller sets RoutingRequest.MultiNeed so the router stays
+	//       a pure function and is unit-testable.
 	if req.TaskType == TaskSynthesis {
-		log.Printf("router: task=%s -> %s (synthesis_always_maverick)", req.TaskType, cfg.BedrockFallbackModel)
-		return cfg.BedrockFallbackModel, "synthesis_always_maverick"
+		switch cfg.SynthesisModel {
+		case "primary":
+			log.Printf("router: task=%s -> %s (synthesis_via_primary)", req.TaskType, cfg.BedrockPrimaryModel)
+			return cfg.BedrockPrimaryModel, "synthesis_via_primary"
+		case "hybrid":
+			if req.MultiNeed {
+				log.Printf("router: task=%s -> %s (synthesis_hybrid_multi_need)", req.TaskType, cfg.BedrockFallbackModel)
+				return cfg.BedrockFallbackModel, "synthesis_hybrid_multi_need"
+			}
+			log.Printf("router: task=%s -> %s (synthesis_hybrid_simple)", req.TaskType, cfg.BedrockPrimaryModel)
+			return cfg.BedrockPrimaryModel, "synthesis_hybrid_simple"
+		default: // "fallback" and anything unrecognized
+			log.Printf("router: task=%s -> %s (synthesis_via_fallback)", req.TaskType, cfg.BedrockFallbackModel)
+			return cfg.BedrockFallbackModel, "synthesis_via_fallback"
+		}
 	}
 
 	// Rule 3: Previous structured-output failure triggers fallback.

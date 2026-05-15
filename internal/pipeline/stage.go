@@ -5,6 +5,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Victoroide/go-ms-rag/internal/domain"
 )
@@ -72,8 +73,15 @@ type QueryContext struct {
 	RetrievedChunks []domain.ScoredChunk
 
 	// Populated by synthesis stage.
-	FinalAnswer string
-	TokenUsage  domain.TokenUsage
+	FinalAnswer    string
+	TokenUsage     domain.TokenUsage
+	ContextTokens  int // estimated synthesis input tokens (after compression)
+	ContextChunks  int // chunks actually sent to the LLM (after adaptive trim)
+	EarlyExit      bool // true if synthesis skipped (cache hit / no chunks)
+
+	// Per-stage timing in milliseconds — observability for tail-latency
+	// analysis. Filled by each stage and surfaced in the query response.
+	StageTimingsMS map[string]int64
 }
 
 // Stage is the interface for a single ingestion pipeline stage.
@@ -106,17 +114,28 @@ func RunIngestionPipeline(ctx context.Context, ic *IngestContext, stages []Stage
 }
 
 // RunRetrievalPipeline executes the retrieval stages in order, short-circuiting
-// on the first error.
+// on the first error. Records per-stage wall-clock time into
+// qc.StageTimingsMS so callers can attribute tail-latency costs.
 func RunRetrievalPipeline(ctx context.Context, qc *QueryContext, stages []QueryStage) ([]StageResult, error) {
+	if qc.StageTimingsMS == nil {
+		qc.StageTimingsMS = make(map[string]int64, len(stages))
+	}
 	results := make([]StageResult, 0, len(stages))
 	for _, s := range stages {
 		if err := ctx.Err(); err != nil {
 			return results, fmt.Errorf("pipeline: context canceled before stage %s: %w", s.ID(), err)
 		}
+		t0 := time.Now()
 		err := s.Run(ctx, qc)
+		qc.StageTimingsMS[string(s.ID())] = time.Since(t0).Milliseconds()
 		results = append(results, StageResult{StageID: s.ID(), Err: err})
 		if err != nil {
 			return results, fmt.Errorf("pipeline: stage %s failed: %w", s.ID(), err)
+		}
+		// Early-exit hook: a stage may set qc.EarlyExit=true to skip the
+		// remaining stages (used by retrieval-cache hits).
+		if qc.EarlyExit {
+			break
 		}
 	}
 	return results, nil

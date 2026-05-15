@@ -38,6 +38,14 @@ type Config struct {
 
 	S3Bucket       string
 	MaxUploadBytes int64
+
+	// SynthesisModel selects which Bedrock model handles answer
+	// synthesis. Values: "primary" (Nova Micro, faster, lower TTFT),
+	// "fallback" (Llama 4 Maverick, more verbose). Default "fallback"
+	// preserves historical behavior; "primary" cuts p95 noticeably at
+	// the cost of slightly terser answers. Configurable so the choice
+	// is a one-line env change, not a redeploy.
+	SynthesisModel string
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -64,6 +72,7 @@ func Load() (*Config, error) {
 		EmbeddingDimensions:     envIntOrDefault("EMBEDDING_DIMENSIONS", 1024),
 		S3Bucket:                envOrDefault("S3_BUCKET", "ms-go-rag"),
 		MaxUploadBytes:          envInt64OrDefault("MAX_UPLOAD_BYTES", 20971520),
+		SynthesisModel:          envOrDefault("SYNTHESIS_MODEL", "fallback"),
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err

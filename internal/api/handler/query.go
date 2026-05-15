@@ -33,11 +33,15 @@ type ScoredChunkResponse struct {
 
 // QueryResponse is the POST /query response body.
 type QueryResponse struct {
-	Answer       string                `json:"answer"`
-	Mode         string                `json:"mode"`
-	ChunksUsed   int                   `json:"chunks_used"`
-	TokenUsage   domain.TokenUsage     `json:"token_usage"`
-	ScoredChunks []ScoredChunkResponse `json:"scored_chunks"`
+	Answer        string                `json:"answer"`
+	Mode          string                `json:"mode"`
+	ChunksUsed    int                   `json:"chunks_used"`
+	ContextChunks int                   `json:"context_chunks,omitempty"`
+	ContextTokens int                   `json:"context_tokens,omitempty"`
+	EarlyExit     bool                  `json:"early_exit,omitempty"`
+	StageTimings  map[string]int64      `json:"stage_timings_ms,omitempty"`
+	TokenUsage    domain.TokenUsage     `json:"token_usage"`
+	ScoredChunks  []ScoredChunkResponse `json:"scored_chunks"`
 }
 
 // APIError is a structured JSON error response.
@@ -117,11 +121,15 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 		}
 
 		resp := QueryResponse{
-			Answer:       qc.FinalAnswer,
-			Mode:         qc.RetrievalMode,
-			ChunksUsed:   len(qc.RetrievedChunks),
-			TokenUsage:   qc.TokenUsage,
-			ScoredChunks: scoredChunks,
+			Answer:        qc.FinalAnswer,
+			Mode:          qc.RetrievalMode,
+			ChunksUsed:    len(qc.RetrievedChunks),
+			ContextChunks: qc.ContextChunks,
+			ContextTokens: qc.ContextTokens,
+			EarlyExit:     qc.EarlyExit,
+			StageTimings:  qc.StageTimingsMS,
+			TokenUsage:    qc.TokenUsage,
+			ScoredChunks:  scoredChunks,
 		}
 
 		log.Printf("query: mode=%s chunks=%d duration=%s", qc.RetrievalMode, len(qc.RetrievedChunks), time.Since(start))
