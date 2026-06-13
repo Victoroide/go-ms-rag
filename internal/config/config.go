@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds all operational parameters for the service.
@@ -46,6 +47,17 @@ type Config struct {
 	// the cost of slightly terser answers. Configurable so the choice
 	// is a one-line env change, not a redeploy.
 	SynthesisModel string
+
+	// FakeMode (GO_RAG_FAKE_MODE) runs the service fully offline: deterministic
+	// in-memory vector store, embedder, and LLM. No AWS/Pinecone credentials
+	// required. DATABASE_URL is still used for metadata (local Postgres in QA).
+	// QA/local only — never enable in production.
+	FakeMode bool
+
+	// ServiceToken (SERVICE_TOKEN), when non-empty, is required in the
+	// X-Service-Token header on the mutating/expensive routes (POST /ingest,
+	// POST /query, DELETE /documents/{id}). Empty disables service auth.
+	ServiceToken string
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -73,6 +85,8 @@ func Load() (*Config, error) {
 		S3Bucket:                envOrDefault("S3_BUCKET", "ms-go-rag"),
 		MaxUploadBytes:          envInt64OrDefault("MAX_UPLOAD_BYTES", 20971520),
 		SynthesisModel:          envOrDefault("SYNTHESIS_MODEL", "fallback"),
+		FakeMode:                envBoolOrDefault("GO_RAG_FAKE_MODE", false),
+		ServiceToken:            os.Getenv("SERVICE_TOKEN"),
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -85,12 +99,18 @@ func (c *Config) validate() error {
 		name  string
 		value string
 	}
+	// DATABASE_URL is always required (metadata store). Cloud creds are only
+	// required in real mode; FakeMode runs without AWS/Pinecone.
 	required := []requirement{
-		{"AWS_REGION", c.AWSRegion},
-		{"AWS_ACCESS_KEY_ID", c.AWSAccessKeyID},
-		{"AWS_SECRET_ACCESS_KEY", c.AWSSecretKey},
-		{"PINECONE_API_KEY", c.PineconeAPIKey},
 		{"DATABASE_URL", c.DatabaseURL},
+	}
+	if !c.FakeMode {
+		required = append(required,
+			requirement{"AWS_REGION", c.AWSRegion},
+			requirement{"AWS_ACCESS_KEY_ID", c.AWSAccessKeyID},
+			requirement{"AWS_SECRET_ACCESS_KEY", c.AWSSecretKey},
+			requirement{"PINECONE_API_KEY", c.PineconeAPIKey},
+		)
 	}
 	var missing []string
 	for _, r := range required {
@@ -108,6 +128,17 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: EMBED_CONCURRENCY must be between 1 and 50, got %d", c.EmbedConcurrency)
 	}
 	return nil
+}
+
+func envBoolOrDefault(key string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func envOrDefault(key, fallback string) string {

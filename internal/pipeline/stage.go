@@ -73,11 +73,11 @@ type QueryContext struct {
 	RetrievedChunks []domain.ScoredChunk
 
 	// Populated by synthesis stage.
-	FinalAnswer    string
-	TokenUsage     domain.TokenUsage
-	ContextTokens  int // estimated synthesis input tokens (after compression)
-	ContextChunks  int // chunks actually sent to the LLM (after adaptive trim)
-	EarlyExit      bool // true if synthesis skipped (cache hit / no chunks)
+	FinalAnswer   string
+	TokenUsage    domain.TokenUsage
+	ContextTokens int  // estimated synthesis input tokens (after compression)
+	ContextChunks int  // chunks actually sent to the LLM (after adaptive trim)
+	EarlyExit     bool // true if synthesis skipped (cache hit / no chunks)
 
 	// Per-stage timing in milliseconds — observability for tail-latency
 	// analysis. Filled by each stage and surfaced in the query response.

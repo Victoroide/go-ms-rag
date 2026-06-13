@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/Victoroide/go-ms-rag/internal/domain"
-	pcstore "github.com/Victoroide/go-ms-rag/internal/store/pinecone"
 	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
 	"github.com/google/uuid"
 )
@@ -18,7 +17,7 @@ type DeleteResponse struct {
 }
 
 // DeleteHandler returns an HTTP handler for DELETE /documents/{doc_id}.
-func DeleteHandler(cs domain.ChunkStore, pcDriver *pcstore.Driver, s3Client *s3store.Client) http.HandlerFunc {
+func DeleteHandler(cs domain.ChunkStore, pcDriver domain.VectorDeleter, s3Client *s3store.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		docIDStr := r.PathValue("doc_id")
 

@@ -18,6 +18,14 @@ type VectorStore interface {
 	Ping(ctx context.Context) error
 }
 
+// VectorDeleter is the subset of vector-store delete operations the document
+// delete handler needs. Both the Pinecone driver and the in-memory fake store
+// satisfy it, so the handler does not depend on a concrete implementation.
+type VectorDeleter interface {
+	DeleteAllVectorsInNamespace(ctx context.Context, namespace string) error
+	DeleteByDocID(ctx context.Context, docID string) error
+}
+
 // ChunkStore manages chunk metadata and document fingerprints in a relational database.
 type ChunkStore interface {
 	InsertDocument(ctx context.Context, doc Document) error

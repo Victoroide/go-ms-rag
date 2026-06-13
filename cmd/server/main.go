@@ -17,10 +17,12 @@ import (
 	"github.com/Victoroide/go-ms-rag/internal/api"
 	"github.com/Victoroide/go-ms-rag/internal/chunker"
 	"github.com/Victoroide/go-ms-rag/internal/config"
+	"github.com/Victoroide/go-ms-rag/internal/domain"
 	"github.com/Victoroide/go-ms-rag/internal/embedder"
 	"github.com/Victoroide/go-ms-rag/internal/llm"
 	"github.com/Victoroide/go-ms-rag/internal/pipeline"
 	"github.com/Victoroide/go-ms-rag/internal/retriever"
+	memstore "github.com/Victoroide/go-ms-rag/internal/store/memory"
 	pcstore "github.com/Victoroide/go-ms-rag/internal/store/pinecone"
 	pgstore "github.com/Victoroide/go-ms-rag/internal/store/postgres"
 	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
@@ -62,49 +64,70 @@ func run() error {
 	}
 	logger.Info("neon connected")
 
-	// Initialize Pinecone.
-	pcClient, err := pcstore.NewPineconeClient(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("startup: pinecone: %w", err)
-	}
-	pcDriver := pcstore.NewDriver(ctx, pcClient)
+	// Select vector store, embedder, and LLM. FAKE MODE (GO_RAG_FAKE_MODE) wires
+	// deterministic offline implementations so the full HTTP API can be exercised
+	// in local QA without Bedrock/Pinecone/S3 cost. Postgres is still the
+	// metadata store. Never enable FAKE MODE in production.
+	var (
+		emb         domain.EmbeddingProvider
+		vectorStore domain.VectorStore
+		vecDeleter  domain.VectorDeleter
+		amb         *llm.Ambassador
+		s3Client    *s3store.Client
+	)
 
-	// Initialize Bedrock embedder.
-	emb, err := embedder.NewBedrockEmbedder(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("startup: embedder: %w", err)
-	}
+	if cfg.FakeMode {
+		logger.Warn("FAKE MODE ACTIVE: deterministic in-memory vector store, embedder, and LLM. No AWS/Pinecone/S3 calls will be made.")
+		mem := memstore.NewFakeVectorStore()
+		vectorStore = mem
+		vecDeleter = mem
+		emb = embedder.NewFakeEmbedder(cfg.EmbeddingDimensions)
+		amb = llm.NewAmbassador(cfg)
+		amb.SetClient(llm.NewFakeConverser())
+	} else {
+		pcClient, pcErr := pcstore.NewPineconeClient(ctx, cfg)
+		if pcErr != nil {
+			return fmt.Errorf("startup: pinecone: %w", pcErr)
+		}
+		pcDriver := pcstore.NewDriver(ctx, pcClient)
+		vectorStore = pcDriver
+		vecDeleter = pcDriver
 
-	// Initialize LLM client and ambassador.
-	llmClient, err := llm.NewClient(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("startup: llm client: %w", err)
+		bedrockEmb, embErr := embedder.NewBedrockEmbedder(ctx, cfg)
+		if embErr != nil {
+			return fmt.Errorf("startup: embedder: %w", embErr)
+		}
+		emb = bedrockEmb
+
+		llmClient, llmErr := llm.NewClient(ctx, cfg)
+		if llmErr != nil {
+			return fmt.Errorf("startup: llm client: %w", llmErr)
+		}
+		amb = llm.NewAmbassador(cfg)
+		amb.SetClient(llmClient)
+
+		// Initialize S3 client (non-fatal if it fails). Skipped in FAKE MODE.
+		if cfg.S3Bucket != "" {
+			s3c, s3Err := s3store.New(ctx, cfg)
+			if s3Err != nil {
+				log.Printf("WARNING: s3 init failed (file uploads disabled): %v", s3Err)
+			} else {
+				s3Client = s3c
+			}
+		}
 	}
-	amb := llm.NewAmbassador(cfg)
-	amb.SetClient(llmClient)
 
 	// Initialize chunker.
 	chk := chunker.NewChunker(cfg.ChunkTokenSize, cfg.ChunkOverlap)
 
 	// Initialize retriever.
-	ret := retriever.NewRetriever(pcDriver, emb, cfg.LocalRetrievalThreshold, cfg.MaxChunksPerQuery)
-
-	// Initialize S3 client (non-fatal if it fails).
-	var s3Client *s3store.Client
-	if cfg.S3Bucket != "" {
-		s3c, s3Err := s3store.New(ctx, cfg)
-		if s3Err != nil {
-			log.Printf("WARNING: s3 init failed (file uploads disabled): %v", s3Err)
-		} else {
-			s3Client = s3c
-		}
-	}
+	ret := retriever.NewRetriever(vectorStore, emb, cfg.LocalRetrievalThreshold, cfg.MaxChunksPerQuery)
 
 	// Build ingestion pipeline stages.
 	ingestStages := []pipeline.Stage{
 		pipeline.NewChunkStage(chk),
 		pipeline.NewEmbedStage(emb),
-		pipeline.NewPersistStage(pcDriver, pgClient),
+		pipeline.NewPersistStage(vectorStore, pgClient),
 	}
 
 	// Initialize worker.
@@ -113,14 +136,14 @@ func run() error {
 
 	// Build HTTP router.
 	router := api.NewRouter(&api.RouterDeps{
-		VectorStore:    pcDriver,
+		VectorStore:    vectorStore,
 		ChunkStore:     pgClient,
 		Retriever:      ret,
 		Ambassador:     amb,
 		Config:         cfg,
 		Worker:         w,
 		S3Client:       s3Client,
-		PineconeDriver: pcDriver,
+		PineconeDriver: vecDeleter,
 		PGPool:         pgClient.Pool,
 	})
 
