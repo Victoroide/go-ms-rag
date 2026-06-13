@@ -23,12 +23,19 @@ type QueryRequest struct {
 }
 
 // ScoredChunkResponse is a single scored chunk in the query response.
+// “kind“ and “quality“ are populated for chunks ingested with the
+// classifier (body/contact/header × high/low) so downstream consumers
+// can de-prioritise low-quality evidence without re-implementing the
+// heuristics. Older chunks ingested before the classifier was added
+// will leave these fields empty; callers must treat that as "unknown".
 type ScoredChunkResponse struct {
 	DocID      string  `json:"doc_id"`
 	DocType    string  `json:"doc_type"`
 	ChunkIndex int     `json:"chunk_index"`
 	Score      float64 `json:"score"`
 	Text       string  `json:"text"`
+	Kind       string  `json:"kind,omitempty"`
+	Quality    string  `json:"quality,omitempty"`
 }
 
 // QueryResponse is the POST /query response body.
@@ -101,15 +108,26 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 
 		scoredChunks := make([]ScoredChunkResponse, 0, len(qc.RetrievedChunks))
 		for _, sc := range qc.RetrievedChunks {
-			docType := ""
+			docType, kind, quality := "", "", ""
 			if sc.Chunk.Metadata != nil {
 				if dt, ok := sc.Chunk.Metadata["doc_type"]; ok {
 					docType, _ = dt.(string)
 				}
+				if k, ok := sc.Chunk.Metadata["kind"]; ok {
+					kind, _ = k.(string)
+				}
+				if q, ok := sc.Chunk.Metadata["quality"]; ok {
+					quality, _ = q.(string)
+				}
 			}
+			// Send up to 600 chars of chunk text so the Django side
+			// has enough raw material to apply its own snippet
+			// cleanup at retrieval time. The chunk itself can be
+			// larger (~512 tokens / ~2k chars) in Pinecone; we only
+			// truncate over the wire.
 			text := sc.Chunk.Text
-			if len(text) > 200 {
-				text = text[:200]
+			if len(text) > 600 {
+				text = text[:600]
 			}
 			scoredChunks = append(scoredChunks, ScoredChunkResponse{
 				DocID:      string(sc.Chunk.DocumentID),
@@ -117,6 +135,8 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 				ChunkIndex: sc.Chunk.Index,
 				Score:      sc.Score,
 				Text:       text,
+				Kind:       kind,
+				Quality:    quality,
 			})
 		}
 

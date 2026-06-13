@@ -75,7 +75,10 @@ func (p *PineconeClient) Upsert(ctx context.Context, namespace string, chunks []
 		if len(c.Embedding) == 0 {
 			continue
 		}
-		// Build metadata with doc_type if available.
+		// Build metadata with doc_type if available. We also carry
+		// the chunk quality signals (kind, quality) produced by the
+		// chunker classifier so retrieval can filter or down-rank
+		// header / contact-only chunks without losing them.
 		mdMap := map[string]any{
 			"doc_id":      string(c.DocumentID),
 			"chunk_index": float64(c.Index),
@@ -83,8 +86,10 @@ func (p *PineconeClient) Upsert(ctx context.Context, namespace string, chunks []
 			"token_count": float64(c.TokenCount),
 		}
 		if c.Metadata != nil {
-			if docType, ok := c.Metadata["doc_type"]; ok {
-				mdMap["doc_type"] = docType
+			for _, k := range []string{"doc_type", "kind", "quality"} {
+				if v, ok := c.Metadata[k]; ok {
+					mdMap[k] = v
+				}
 			}
 		}
 		md, err := structpb.NewStruct(mdMap)
