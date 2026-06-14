@@ -24,6 +24,10 @@ func RequireServiceToken(token string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// NOTE: in production the SERVICE_TOKEN env is set, so /ingest, /query and
+// DELETE /documents/{id} require a matching X-Service-Token (the Django backend
+// sends GO_RAG_SERVICE_TOKEN). /health and the presigned file GET stay public.
+//
 // LogServiceAuthState logs once whether service auth is enforced, without
 // leaking the token value.
 func LogServiceAuthState(token string) {
