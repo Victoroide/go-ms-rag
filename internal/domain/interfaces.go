@@ -32,6 +32,7 @@ type ChunkStore interface {
 	InsertChunks(ctx context.Context, chunks []Chunk) error
 	GetDocument(ctx context.Context, id DocumentID) (*Document, error)
 	GetDocumentS3Key(ctx context.Context, id DocumentID) (*string, error)
+	ListDocuments(ctx context.Context) ([]DocumentRef, error)
 	UpdateDocumentStatus(ctx context.Context, id DocumentID, status string) error
 	CheckFingerprint(ctx context.Context, fingerprint string) (DocumentID, bool, error)
 	StoreFingerprint(ctx context.Context, fingerprint string, docID string) error

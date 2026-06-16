@@ -162,6 +162,25 @@ func (c *Client) GetDocumentS3Key(ctx context.Context, id domain.DocumentID) (*s
 	return s3Key, nil
 }
 
+// ListDocuments returns a lightweight reference for every stored document, used
+// by the backend reconciliation command to detect orphaned/stale vectors.
+func (c *Client) ListDocuments(ctx context.Context) ([]domain.DocumentRef, error) {
+	rows, err := c.Pool.Query(ctx, `SELECT id, doc_type, s3_key FROM documents`)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list documents: %w", err)
+	}
+	defer rows.Close()
+	var out []domain.DocumentRef
+	for rows.Next() {
+		var ref domain.DocumentRef
+		if err := rows.Scan(&ref.ID, &ref.DocType, &ref.S3Key); err != nil {
+			return nil, fmt.Errorf("postgres: scan document ref: %w", err)
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
+}
+
 // DeleteDocument deletes a document by ID. Chunks and fingerprints cascade via FK.
 func (c *Client) DeleteDocument(ctx context.Context, id domain.DocumentID) error {
 	_, err := c.Pool.Exec(ctx, `DELETE FROM documents WHERE id = $1`, string(id))

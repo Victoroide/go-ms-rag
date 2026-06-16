@@ -90,6 +90,20 @@ func (m *mockChunkStore) DeleteDocument(_ context.Context, id domain.DocumentID)
 	delete(m.documents, string(id))
 	return nil
 }
+
+func (m *mockChunkStore) ListDocuments(_ context.Context) ([]domain.DocumentRef, error) {
+	out := make([]domain.DocumentRef, 0, len(m.documents))
+	for id, doc := range m.documents {
+		ref := domain.DocumentRef{ID: id, S3Key: doc.S3Key}
+		if doc.Metadata != nil {
+			if dt, ok := doc.Metadata["doc_type"].(string); ok {
+				ref.DocType = dt
+			}
+		}
+		out = append(out, ref)
+	}
+	return out, nil
+}
 func (m *mockChunkStore) Ping(_ context.Context) error          { return nil }
 func (m *mockChunkStore) Close(_ context.Context) error         { return nil }
 func (m *mockChunkStore) RunMigrations(_ context.Context) error { return nil }

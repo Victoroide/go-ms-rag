@@ -4,6 +4,13 @@ package domain
 // DocumentID uniquely identifies an ingested document.
 type DocumentID string
 
+// DocumentRef is a lightweight document record for reconciliation listings.
+type DocumentRef struct {
+	ID      string  `json:"document_id"`
+	DocType string  `json:"doc_type"`
+	S3Key   *string `json:"s3_key,omitempty"`
+}
+
 // ChunkID uniquely identifies a chunk within a document.
 type ChunkID string
 

@@ -75,3 +75,21 @@ func DeleteHandler(cs domain.ChunkStore, pcDriver domain.VectorDeleter, s3Client
 		}
 	}
 }
+
+// ListDocumentsHandler returns every stored document reference (id, doc_type,
+// s3_key). The backend reconciliation command diffs this against its active rows
+// to find orphaned vectors. Service-token protected; emits no content/PII.
+func ListDocumentsHandler(cs domain.ChunkStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		docs, err := cs.ListDocuments(r.Context())
+		if err != nil {
+			log.Printf("list documents: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "internal", "failed to list documents")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"documents": docs, "count": len(docs)}); err != nil {
+			log.Printf("list documents: encode response: %v", err)
+		}
+	}
+}
