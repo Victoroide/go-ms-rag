@@ -15,11 +15,19 @@ import (
 )
 
 // QueryRequest is the POST /query request body.
+//
+// AllowedDocumentIDs is an optional tenant/role allowlist. When the caller
+// supplies it (non-null), retrieval is restricted to those document ids BEFORE
+// synthesis, so the LLM can never read — let alone summarize — documents the
+// caller is not permitted to see. A null value means "no restriction"; an empty
+// array matches nothing. This is how the Django backend enforces that a company
+// representative only sees CVs of candidates who applied to their own company.
 type QueryRequest struct {
-	Query         string `json:"query"`
-	Mode          string `json:"mode,omitempty"`
-	FilterDocType string `json:"filter_doc_type,omitempty"`
-	MaxChunks     int    `json:"max_chunks,omitempty"`
+	Query              string   `json:"query"`
+	Mode               string   `json:"mode,omitempty"`
+	FilterDocType      string   `json:"filter_doc_type,omitempty"`
+	MaxChunks          int      `json:"max_chunks,omitempty"`
+	AllowedDocumentIDs []string `json:"allowed_document_ids,omitempty"`
 }
 
 // ScoredChunkResponse is a single scored chunk in the query response.
@@ -87,10 +95,11 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 		ctx := r.Context()
 
 		qc := &pipeline.QueryContext{
-			OriginalQuery: req.Query,
-			MaxChunks:     req.MaxChunks,
-			RequestedMode: req.Mode,
-			FilterDocType: req.FilterDocType,
+			OriginalQuery:      req.Query,
+			MaxChunks:          req.MaxChunks,
+			RequestedMode:      req.Mode,
+			FilterDocType:      req.FilterDocType,
+			AllowedDocumentIDs: req.AllowedDocumentIDs,
 		}
 
 		stages := []pipeline.QueryStage{

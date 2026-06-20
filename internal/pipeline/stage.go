@@ -60,6 +60,10 @@ type QueryContext struct {
 	MaxChunks     int
 	RequestedMode string
 	FilterDocType string
+	// AllowedDocumentIDs, when non-nil, restricts retrieved chunks to this
+	// allowlist BEFORE synthesis (tenant/role scoping). Nil = no restriction;
+	// non-nil empty = matches nothing.
+	AllowedDocumentIDs []string
 
 	// Populated by decomposition stage.
 	NamedEntity string

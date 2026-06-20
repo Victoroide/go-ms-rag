@@ -216,9 +216,36 @@ func (s *RetrievalStage) Run(ctx context.Context, qc *QueryContext) error {
 	if err != nil {
 		return fmt.Errorf("retrieval_stage: %w", err)
 	}
-	qc.RetrievedChunks = result.Chunks
+	// Enforce the caller's tenant/role allowlist BEFORE the synthesis stage
+	// runs, so privileged content never reaches the LLM context (and so can
+	// never leak into the generated answer). A nil allowlist is a no-op.
+	qc.RetrievedChunks = filterChunksByAllowedDocIDs(result.Chunks, qc.AllowedDocumentIDs)
 	qc.TopScore = result.TopScore
+	if len(qc.RetrievedChunks) > 0 {
+		qc.TopScore = qc.RetrievedChunks[0].Score
+	}
 	return nil
+}
+
+// filterChunksByAllowedDocIDs restricts chunks to a caller-supplied document-id
+// allowlist. allowed == nil means "no restriction" (admins / candidate vacancy
+// search); a non-nil but empty allowlist matches nothing (a representative with
+// no applicants). Chunks stay in their original score order.
+func filterChunksByAllowedDocIDs(chunks []domain.ScoredChunk, allowed []string) []domain.ScoredChunk {
+	if allowed == nil {
+		return chunks
+	}
+	allowSet := make(map[string]struct{}, len(allowed))
+	for _, id := range allowed {
+		allowSet[id] = struct{}{}
+	}
+	out := make([]domain.ScoredChunk, 0, len(chunks))
+	for _, sc := range chunks {
+		if _, ok := allowSet[string(sc.Chunk.DocumentID)]; ok {
+			out = append(out, sc)
+		}
+	}
+	return out
 }
 
 // SynthesisStage synthesizes a final answer from retrieved chunks.
