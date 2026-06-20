@@ -127,6 +127,12 @@ func (c *Config) validate() error {
 	if c.EmbedConcurrency < 1 || c.EmbedConcurrency > 50 {
 		return fmt.Errorf("config: EMBED_CONCURRENCY must be between 1 and 50, got %d", c.EmbedConcurrency)
 	}
+	// Fail closed: a real (non-fake) deployment must set SERVICE_TOKEN so the
+	// mutating/file routes are authenticated. An empty token disables service
+	// auth, which is acceptable only for offline fake mode (dev/CI/QA).
+	if !c.FakeMode && strings.TrimSpace(c.ServiceToken) == "" {
+		return fmt.Errorf("config: SERVICE_TOKEN is required when GO_RAG_FAKE_MODE is off")
+	}
 	return nil
 }
 
