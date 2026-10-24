@@ -22,7 +22,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o /bin/server ./cmd/server
 
 # ── final runtime image (minimal) ───────────────────────
-FROM alpine:3.23.4 AS runtime
+FROM alpine:3.24.2 AS runtime
 RUN apk add --no-cache ca-certificates tzdata && addgroup -S -g 10001 app && adduser -S -u 10001 -G app app
 WORKDIR /app
 COPY --from=builder /bin/server /app/server
