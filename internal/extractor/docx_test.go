@@ -1,0 +1,57 @@
+package extractor
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"errors"
+	"strings"
+	"testing"
+)
+
+func docxBytes(t *testing.T, xml string) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	writer := zip.NewWriter(&out)
+	file, err := writer.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte(xml)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
+}
+func TestDOCXPreservesTextAcrossFormattingRuns(t *testing.T) {
+	data := docxBytes(t, `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Document pre</w:t></w:r><w:r><w:t>servation requires </w:t></w:r><w:r><w:t>stable storage.</w:t></w:r></w:p></w:body></w:document>`)
+	got, err := New(FileTypeDOCX).Extract(t.Context(), bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Document preservation requires stable storage." {
+		t.Fatalf("formatting changed text: %q", got)
+	}
+}
+func TestExtractorsHonorCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, format := range []FileType{FileTypeText, FileTypeDOC, FileTypeDOCX, FileTypePDF} {
+		_, err := New(format).Extract(ctx, strings.NewReader("Sufficiently long source text."))
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("%s: got %v want cancellation", format, err)
+		}
+	}
+}
+func TestDOCXRejectsExcessiveExpansion(t *testing.T) {
+	data := docxBytes(t, `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>`+strings.Repeat("x", (16<<20)+1)+`</w:t></w:r></w:p></w:body></w:document>`)
+	_, err := New(FileTypeDOCX).Extract(t.Context(), bytes.NewReader(data))
+	if err == nil {
+		t.Fatal("oversized document XML accepted")
+	}
+	if !strings.Contains(err.Error(), "maximum") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

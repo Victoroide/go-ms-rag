@@ -156,8 +156,8 @@ func TestIngestEndToEnd(t *testing.T) {
 
 	h := handler.IngestHandler(w, cs, nil, 20971520)
 
-	body := `{"content":"Laura Benitez - Senior Software Engineer. 9 years experience. Skills: Go, gRPC, AWS Bedrock."}`
-	req := httptest.NewRequest(http.MethodPost, "/ingest", bytes.NewBufferString(body))
+	body := `{"content":"Cedar Archive operating guide. Retains technical reports for nine years. Systems: Go, gRPC, AWS Bedrock."}`
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/ingest", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -198,7 +198,7 @@ func TestIngestDedup(t *testing.T) {
 	h := handler.IngestHandler(w, cs, nil, 20971520)
 
 	body := `{"content":"Duplicate content test document."}`
-	req := httptest.NewRequest(http.MethodPost, "/ingest", bytes.NewBufferString(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/ingest", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -253,7 +253,7 @@ func createMultipartRequest(t *testing.T, filename string, fileData []byte) *htt
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	req := httptest.NewRequest(http.MethodPost, "/ingest", &body)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/ingest", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return req
 }
@@ -278,8 +278,8 @@ func TestIngestDOCXFile(t *testing.T) {
 
 	h := handler.IngestHandler(w, cs, nil, 20971520)
 
-	docxData := buildTestDOCX("Laura Benitez Senior Software Engineer with extensive experience in Go and AWS Bedrock and microservices architecture")
-	req := createMultipartRequest(t, "test_resume.docx", docxData)
+	docxData := buildTestDOCX("Cedar Archive technical guide covering Go and AWS Bedrock integration with microservices and long-term document preservation")
+	req := createMultipartRequest(t, "test_document.docx", docxData)
 	rec := httptest.NewRecorder()
 
 	h.ServeHTTP(rec, req)
@@ -335,7 +335,7 @@ func TestGetDocumentFileNoS3Key(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /documents/{doc_id}/file", handler.FileHandler(cs, nil))
-	req := httptest.NewRequest(http.MethodGet, "/documents/550e8400-e29b-41d4-a716-446655440000/file", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/documents/550e8400-e29b-41d4-a716-446655440000/file", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -350,7 +350,7 @@ func TestGetDocumentFileInvalidUUID(t *testing.T) {
 	cs := newMockChunkStore()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /documents/{doc_id}/file", handler.FileHandler(cs, nil))
-	req := httptest.NewRequest(http.MethodGet, "/documents/not-a-uuid/file", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/documents/not-a-uuid/file", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -360,7 +360,7 @@ func TestGetDocumentFileInvalidUUID(t *testing.T) {
 
 // Verify extractor.DetectFileType is used correctly from tests.
 func TestDetectFileTypeIntegration(t *testing.T) {
-	ft, err := extractor.DetectFileType("resume.pdf")
+	ft, err := extractor.DetectFileType("document.pdf")
 	require.NoError(t, err)
 	assert.Equal(t, extractor.FileTypePDF, ft)
 

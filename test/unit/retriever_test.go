@@ -2,7 +2,10 @@ package unit
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/Victoroide/go-ms-rag/internal/domain"
 	"github.com/Victoroide/go-ms-rag/internal/retriever"
@@ -70,4 +73,28 @@ func TestGlobalModeFallback(t *testing.T) {
 	assert.NotNil(t, result)
 	// Even with 0 results, the fallback runs but still gets 0 from mock.
 	assert.Equal(t, retriever.RetrievalModeGlobal, result.Mode)
+}
+
+type transientProbeStore struct {
+	mockVectorStore
+	calls int
+}
+
+func (s *transientProbeStore) QueryAllNamespaces(context.Context, []float32, int, string) ([]domain.ScoredChunk, error) {
+	s.calls++
+	if s.calls == 1 {
+		return nil, errors.New("temporary probe failure")
+	}
+	return []domain.ScoredChunk{{Chunk: domain.Chunk{ID: "evidence", Text: "Archive operating hours."}, Score: 0.8}}, nil
+}
+func TestRoutingProbeFailureFallsBackToGlobal(t *testing.T) {
+	store := &transientProbeStore{}
+	ret := retriever.NewRetriever(store, &mockEmbedder{}, 0.7, 10)
+	embedding, score, failed, err := ret.EmbedQuery(t.Context(), "archive")
+	require.NoError(t, err)
+	require.True(t, failed)
+	require.Zero(t, score)
+	result, err := ret.RetrieveWithEmbedding(t.Context(), embedding, retriever.RetrievalModeGlobal, "", 10, "")
+	require.NoError(t, err)
+	require.Len(t, result.Chunks, 1)
 }

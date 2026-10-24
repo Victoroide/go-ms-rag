@@ -25,11 +25,14 @@ type IngestTask struct {
 
 // Worker processes ingest tasks from a buffered channel queue.
 type Worker struct {
-	queue  chan IngestTask
-	stages []pipeline.Stage
-	cs     domain.ChunkStore
-	wg     sync.WaitGroup
-	cancel context.CancelFunc
+	queue   chan IngestTask
+	stages  []pipeline.Stage
+	cs      domain.ChunkStore
+	wg      sync.WaitGroup
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	started bool
+	stopped bool
 }
 
 // NewWorker creates a Worker with the given queue size and pipeline stages.
@@ -46,6 +49,11 @@ func NewWorker(queueSize int, stages []pipeline.Stage, cs domain.ChunkStore) *Wo
 
 // Enqueue adds a task to the ingest queue. Returns false if the queue is full.
 func (w *Worker) Enqueue(task IngestTask) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped {
+		return false
+	}
 	select {
 	case w.queue <- task:
 		return true
@@ -57,6 +65,12 @@ func (w *Worker) Enqueue(task IngestTask) bool {
 
 // Start launches the single goroutine consumer.
 func (w *Worker) Start(ctx context.Context) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.started || w.stopped {
+		return
+	}
+	w.started = true
 	workerCtx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
 
@@ -79,14 +93,34 @@ func (w *Worker) Start(ctx context.Context) {
 	log.Printf("worker: started with queue size %d", cap(w.queue))
 }
 
-// Shutdown gracefully stops the worker and waits for in-flight tasks.
-func (w *Worker) Shutdown() {
-	if w.cancel != nil {
-		w.cancel()
+// Shutdown stops accepting tasks and waits for accepted work to finish.
+func (w *Worker) Shutdown() { _ = w.ShutdownContext(context.Background()) }
+
+// ShutdownContext drains accepted work, canceling it when the deadline expires.
+// Stages must honor cancellation so the store can close only after the worker exits.
+func (w *Worker) ShutdownContext(ctx context.Context) error {
+	w.mu.Lock()
+	if !w.stopped {
+		w.stopped = true
+		close(w.queue)
 	}
-	close(w.queue)
-	w.wg.Wait()
-	log.Printf("worker: shutdown complete")
+	cancel := w.cancel
+	w.mu.Unlock()
+	done := make(chan struct{})
+	go func() { w.wg.Wait(); close(done) }()
+	if cancel != nil {
+		defer cancel()
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		if cancel != nil {
+			cancel()
+		}
+		<-done
+		return ctx.Err()
+	}
 }
 
 func (w *Worker) processTask(ctx context.Context, task IngestTask) {
@@ -94,7 +128,7 @@ func (w *Worker) processTask(ctx context.Context, task IngestTask) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("worker: panic processing document %s: %v", task.DocumentID, r)
-			if err := w.cs.UpdateDocumentStatus(ctx, task.DocumentID, "failed"); err != nil {
+			if err := w.recordFailure(ctx, task.DocumentID); err != nil {
 				log.Printf("worker: update status after panic for %s: %v", task.DocumentID, err)
 			}
 		}
@@ -119,7 +153,7 @@ func (w *Worker) processTask(ctx context.Context, task IngestTask) {
 	_, err = pipeline.RunIngestionPipeline(ctx, ic, w.stages)
 	if err != nil {
 		log.Printf("worker: ingest failed for document %s: %v", task.DocumentID, err)
-		if statusErr := w.cs.UpdateDocumentStatus(ctx, task.DocumentID, "failed"); statusErr != nil {
+		if statusErr := w.recordFailure(ctx, task.DocumentID); statusErr != nil {
 			log.Printf("worker: update status to failed for %s: %v", task.DocumentID, statusErr)
 		}
 		return
@@ -129,4 +163,10 @@ func (w *Worker) processTask(ctx context.Context, task IngestTask) {
 		log.Printf("worker: update status to completed for %s: %v", task.DocumentID, statusErr)
 	}
 	log.Printf("worker: document %s ingested in %s", task.DocumentID, time.Since(start))
+}
+
+func (w *Worker) recordFailure(ctx context.Context, id domain.DocumentID) error {
+	statusCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return w.cs.UpdateDocumentStatus(statusCtx, id, "failed")
 }

@@ -1,7 +1,7 @@
 // Package smoke runs end-to-end smoke tests against a live server at localhost:8081.
 // Set RUN_SMOKE=1 to enable these tests.
 //
-// NOTE: These tests create real documents in production Pinecone and Neon.
+// These tests create documents in the configured live services.
 // Each test automatically cleans up its created documents via t.Cleanup.
 package smoke
 
@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -75,11 +76,11 @@ func createMultipartBody(filename string, data []byte) (body *bytes.Buffer, cont
 func TestSmoke_HealthIncludesS3(t *testing.T) {
 	skipUnlessSmoke(t)
 
-	resp, err := http.Get(baseURL + "/health")
+	resp, err := request(t.Context(), http.MethodGet, baseURL+"/health", "", http.NoBody)
 	if err != nil {
 		t.Fatalf("health request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result map[string]string
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -96,14 +97,14 @@ func TestSmoke_HealthIncludesS3(t *testing.T) {
 func TestSmoke_IngestDOCXFile(t *testing.T) {
 	skipUnlessSmoke(t)
 
-	docxData := buildTestDOCX("Smoke Test Candidate Profile: Maria Garcia Senior Data Engineer with 7 years experience in Python Spark and AWS Bedrock integration and cloud computing")
+	docxData := buildTestDOCX("Smoke Test Reference Document: Cedar Archive retains reports for seven years using Python Spark and AWS Bedrock integration for indexed document research")
 	body, contentType := createMultipartBody("smoke_test.docx", docxData)
 
-	resp, err := http.Post(baseURL+"/ingest", contentType, body)
+	resp, err := request(t.Context(), http.MethodPost, baseURL+"/ingest", contentType, body)
 	if err != nil {
 		t.Fatalf("ingest request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusAccepted {
 		bodyBytes, _ := io.ReadAll(resp.Body)
@@ -120,30 +121,18 @@ func TestSmoke_IngestDOCXFile(t *testing.T) {
 	docID := result["document_id"]
 	t.Logf("ingested doc: %s, status: %s", docID, result["status"])
 
-	// Register cleanup
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("load config for cleanup: %v", err)
-	}
-	t.Cleanup(func() {
-		ctx := context.Background()
-		if cleanupErr := cleanup.CleanupDocument(ctx, cfg, docID); cleanupErr != nil {
-			t.Errorf("cleanup document %s: %v", docID, cleanupErr)
-		} else {
-			t.Logf("cleaned up test document: %s", docID)
-		}
-	})
+	registerDocumentCleanup(t, docID)
 
 	// Wait for worker to process.
 	time.Sleep(5 * time.Second)
 
 	// Test 3: Try to get file URL for this document.
 	fileURL := fmt.Sprintf("%s/documents/%s/file", baseURL, result["document_id"])
-	fileResp, err := http.Get(fileURL)
+	fileResp, err := request(t.Context(), http.MethodGet, fileURL, "", http.NoBody)
 	if err != nil {
 		t.Fatalf("file request: %v", err)
 	}
-	defer fileResp.Body.Close()
+	defer func() { _ = fileResp.Body.Close() }()
 
 	fileBody, _ := io.ReadAll(fileResp.Body)
 	t.Logf("file response (%d): %s", fileResp.StatusCode, string(fileBody))
@@ -159,11 +148,11 @@ func TestSmoke_UnsupportedFileType(t *testing.T) {
 	skipUnlessSmoke(t)
 
 	body, contentType := createMultipartBody("data.csv", []byte("col1,col2\nval1,val2"))
-	resp, err := http.Post(baseURL+"/ingest", contentType, body)
+	resp, err := request(t.Context(), http.MethodPost, baseURL+"/ingest", contentType, body)
 	if err != nil {
 		t.Fatalf("ingest request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusUnsupportedMediaType {
 		bodyBytes, _ := io.ReadAll(resp.Body)
@@ -182,11 +171,11 @@ func TestSmoke_LargeFileUpload(t *testing.T) {
 	docxData := buildTestDOCX(bigText)
 	body, contentType := createMultipartBody("big.docx", docxData)
 
-	resp, err := http.Post(baseURL+"/ingest", contentType, body)
+	resp, err := request(t.Context(), http.MethodPost, baseURL+"/ingest", contentType, body)
 	if err != nil {
 		t.Fatalf("ingest request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// This file is under 20MB so it should be accepted.
 	// We're testing that the multipart path works, not the exact size limit.
@@ -195,6 +184,17 @@ func TestSmoke_LargeFileUpload(t *testing.T) {
 	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 202 or 413, got %d", resp.StatusCode)
 	}
+	if resp.StatusCode == http.StatusAccepted {
+		var result map[string]string
+		if decodeErr := json.Unmarshal(bodyBytes, &result); decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		if result["document_id"] == "" {
+			t.Fatal("missing document_id")
+		}
+		registerDocumentCleanup(t, result["document_id"])
+	}
+
 }
 
 // Test 6: Existing JSON ingest still works.
@@ -202,11 +202,11 @@ func TestSmoke_JSONIngestStillWorks(t *testing.T) {
 	skipUnlessSmoke(t)
 
 	payload := `{"content":"Smoke test: JSON ingest path verification. This document is ingested via the original JSON API path to verify backward compatibility."}`
-	resp, err := http.Post(baseURL+"/ingest", "application/json", strings.NewReader(payload))
+	resp, err := request(t.Context(), http.MethodPost, baseURL+"/ingest", "application/json", strings.NewReader(payload))
 	if err != nil {
 		t.Fatalf("json ingest request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	t.Logf("json ingest response (%d): %s", resp.StatusCode, string(bodyBytes))
@@ -222,20 +222,81 @@ func TestSmoke_JSONIngestStillWorks(t *testing.T) {
 			if docID := result["document_id"]; docID != "" {
 				t.Logf("ingested JSON doc: %s", docID)
 
-				// Register cleanup
-				cfg, err := config.Load()
-				if err != nil {
-					t.Fatalf("load config for cleanup: %v", err)
-				}
-				t.Cleanup(func() {
-					ctx := context.Background()
-					if cleanupErr := cleanup.CleanupDocument(ctx, cfg, docID); cleanupErr != nil {
-						t.Errorf("cleanup document %s: %v", docID, cleanupErr)
-					} else {
-						t.Logf("cleaned up test document: %s", docID)
-					}
-				})
+				registerDocumentCleanup(t, docID)
 			}
 		}
+	}
+}
+
+func request(ctx context.Context, method, url, contentType string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	req.Header.Set("X-Service-Token", os.Getenv("SERVICE_TOKEN"))
+	return (&http.Client{Timeout: 120 * time.Second}).Do(req)
+}
+
+func registerDocumentCleanup(t *testing.T, docID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		cfg, err := config.Load()
+		if err != nil {
+			t.Errorf("load deletion configuration: %v", err)
+			return
+		}
+		cleaner, err := cleanup.New(ctx, cfg)
+		if err != nil {
+			t.Errorf("connect deletion stores: %v", err)
+			return
+		}
+		defer func() {
+			if closeErr := cleaner.Close(ctx); closeErr != nil {
+				t.Errorf("close deletion stores: %v", closeErr)
+			}
+		}()
+		if err := deleteWhenPresent(ctx, func() error { return cleaner.Delete(ctx, docID) }); err != nil {
+			t.Errorf("delete document %s: %v", docID, err)
+		}
+	})
+}
+
+func deleteWhenPresent(ctx context.Context, deleteDocument func() error) error {
+	for {
+		err := deleteDocument()
+		if !errors.Is(err, cleanup.ErrDocumentNotFound) {
+			return err
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func TestDeferredDeletionWaitsForIngestion(t *testing.T) {
+	attempts := 0
+	err := deleteWhenPresent(t.Context(), func() error {
+		attempts++
+		if attempts == 1 {
+			return cleanup.ErrDocumentNotFound
+		}
+		return nil
+	})
+	if err != nil || attempts != 2 {
+		t.Fatalf("deferred deletion: attempts=%d error=%v", attempts, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := deleteWhenPresent(ctx, func() error { return cleanup.ErrDocumentNotFound }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected bounded cancellation: %v", err)
 	}
 }

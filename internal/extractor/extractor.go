@@ -12,6 +12,7 @@ import (
 // FileType identifies a supported file format.
 type FileType string
 
+// Supported document formats.
 const (
 	FileTypeText FileType = "text"
 	FileTypePDF  FileType = "pdf"

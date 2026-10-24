@@ -13,8 +13,7 @@ func Recovery(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Printf("panic recovered: %v\n%s", rec, debug.Stack())
-				http.Error(w, `{"error":"internal","message":"internal server error"}`,
-					http.StatusInternalServerError)
+				writeJSONErr(w, http.StatusInternalServerError, "internal", "internal server error")
 			}
 		}()
 		next.ServeHTTP(w, r)

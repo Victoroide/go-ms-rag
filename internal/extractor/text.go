@@ -11,8 +11,8 @@ type textExtractor struct{}
 
 func (e *textExtractor) Type() FileType { return FileTypeText }
 
-func (e *textExtractor) Extract(_ context.Context, r io.Reader) (string, error) {
-	data, err := io.ReadAll(r)
+func (e *textExtractor) Extract(ctx context.Context, r io.Reader) (string, error) {
+	data, err := readSource(ctx, r)
 	if err != nil {
 		return "", fmt.Errorf("extractor: text: %w", err)
 	}

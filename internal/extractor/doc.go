@@ -14,8 +14,8 @@ type docExtractor struct{}
 
 func (e *docExtractor) Type() FileType { return FileTypeDOC }
 
-func (e *docExtractor) Extract(_ context.Context, r io.Reader) (string, error) {
-	data, err := io.ReadAll(r)
+func (e *docExtractor) Extract(ctx context.Context, r io.Reader) (string, error) {
+	data, err := readSource(ctx, r)
 	if err != nil {
 		return "", fmt.Errorf("extractor: doc: read: %w", err)
 	}

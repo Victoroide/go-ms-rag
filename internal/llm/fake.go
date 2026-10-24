@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -51,11 +52,11 @@ func (f *FakeConverser) synthesize(messages []brtypes.Message) *bedrockruntime.C
 	}
 	prompt := user.String()
 	answer := fmt.Sprintf(
-		"[FAKE MODE] Respuesta determinista basada en el contexto recuperado.\n\n%s",
+		"[FAKE MODE]\n\n%s",
 		groundedSummary(prompt),
 	)
-	in := int32(EstimateTokens(prompt))
-	out := int32(EstimateTokens(answer))
+	in := fakeTokenCount(prompt)
+	out := fakeTokenCount(answer)
 	log.Printf("fake_llm: deterministic synthesis (%d chars)", len(answer))
 
 	return &bedrockruntime.ConverseOutput{
@@ -94,7 +95,18 @@ func groundedSummary(prompt string) string {
 		}
 	}
 	if b.Len() == 0 {
-		return "Sin contexto recuperado."
+		return "No retrieved context."
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func fakeTokenCount(text string) int32 {
+	count := EstimateTokens(text)
+	if count > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if count < 0 {
+		return 0
+	}
+	return int32(count)
 }
