@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -40,12 +41,7 @@ type Config struct {
 	S3Bucket       string
 	MaxUploadBytes int64
 
-	// SynthesisModel selects which Bedrock model handles answer
-	// synthesis. Values: "primary" (Nova Micro, faster, lower TTFT),
-	// "fallback" (Llama 4 Maverick, more verbose). Default "fallback"
-	// preserves historical behavior; "primary" cuts p95 noticeably at
-	// the cost of slightly terser answers. Configurable so the choice
-	// is a one-line env change, not a redeploy.
+	// SynthesisModel selects primary, fallback or hybrid answer routing.
 	SynthesisModel string
 
 	// FakeMode (GO_RAG_FAKE_MODE) runs the service fully offline: deterministic
@@ -54,9 +50,7 @@ type Config struct {
 	// QA/local only — never enable in production.
 	FakeMode bool
 
-	// ServiceToken (SERVICE_TOKEN), when non-empty, is required in the
-	// X-Service-Token header on the mutating/expensive routes (POST /ingest,
-	// POST /query, DELETE /documents/{id}). Empty disables service auth.
+	// ServiceToken protects every route except the public health probe.
 	ServiceToken string
 }
 
@@ -64,30 +58,47 @@ type Config struct {
 // and validates required fields.
 func Load() (*Config, error) {
 	cfg := &Config{
-		ServerPort:              envOrDefault("SERVER_PORT", "8081"),
-		AWSRegion:               os.Getenv("AWS_REGION"),
-		AWSAccessKeyID:          os.Getenv("AWS_ACCESS_KEY_ID"),
-		AWSSecretKey:            os.Getenv("AWS_SECRET_ACCESS_KEY"),
-		BedrockEmbedModel:       envOrDefault("BEDROCK_EMBED_MODEL", "amazon.titan-embed-text-v2:0"),
-		BedrockPrimaryModel:     envOrDefault("BEDROCK_PRIMARY_MODEL", "amazon.nova-micro-v1:0"),
-		BedrockFallbackModel:    envOrDefault("BEDROCK_FALLBACK_MODEL", "us.meta.llama4-maverick-17b-instruct-v1:0"),
-		PineconeAPIKey:          os.Getenv("PINECONE_API_KEY"),
-		PineconeIndexName:       envOrDefault("PINECONE_INDEX_NAME", "go-ms-rag"),
-		PineconeEnvironment:     os.Getenv("PINECONE_ENVIRONMENT"),
-		DatabaseURL:             os.Getenv("DATABASE_URL"),
-		WorkerQueueSize:         envIntOrDefault("WORKER_QUEUE_SIZE", 100),
-		EmbedConcurrency:        envIntOrDefault("EMBED_CONCURRENCY", 10),
-		LocalRetrievalThreshold: envFloat64OrDefault("LOCAL_RETRIEVAL_THRESHOLD", 0.70),
-		MaxChunksPerQuery:       envIntOrDefault("MAX_CHUNKS_PER_QUERY", 10),
-		ChunkTokenSize:          envIntOrDefault("CHUNK_TOKEN_SIZE", 512),
-		ChunkOverlap:            envIntOrDefault("CHUNK_OVERLAP", 64),
-		EmbeddingDimensions:     envIntOrDefault("EMBEDDING_DIMENSIONS", 1024),
-		S3Bucket:                envOrDefault("S3_BUCKET", "ms-go-rag"),
-		MaxUploadBytes:          envInt64OrDefault("MAX_UPLOAD_BYTES", 20971520),
-		SynthesisModel:          envOrDefault("SYNTHESIS_MODEL", "fallback"),
-		FakeMode:                envBoolOrDefault("GO_RAG_FAKE_MODE", false),
-		ServiceToken:            os.Getenv("SERVICE_TOKEN"),
+		ServerPort:           envOrDefault("SERVER_PORT", "8081"),
+		AWSRegion:            os.Getenv("AWS_REGION"),
+		AWSAccessKeyID:       os.Getenv("AWS_ACCESS_KEY_ID"),
+		AWSSecretKey:         os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		BedrockEmbedModel:    envOrDefault("BEDROCK_EMBED_MODEL", "amazon.titan-embed-text-v2:0"),
+		BedrockPrimaryModel:  envOrDefault("BEDROCK_PRIMARY_MODEL", "amazon.nova-micro-v1:0"),
+		BedrockFallbackModel: envOrDefault("BEDROCK_FALLBACK_MODEL", "us.meta.llama4-maverick-17b-instruct-v1:0"),
+		PineconeAPIKey:       os.Getenv("PINECONE_API_KEY"),
+		PineconeIndexName:    envOrDefault("PINECONE_INDEX_NAME", "go-ms-rag"),
+		PineconeEnvironment:  os.Getenv("PINECONE_ENVIRONMENT"),
+		DatabaseURL:          os.Getenv("DATABASE_URL"),
+		S3Bucket:             envOrDefault("S3_BUCKET", "ms-go-rag"),
+		SynthesisModel:       envOrDefault("SYNTHESIS_MODEL", "fallback"),
+		ServiceToken:         os.Getenv("SERVICE_TOKEN"),
 	}
+	for _, setting := range []struct {
+		key      string
+		dst      *int
+		fallback int
+	}{
+		{"WORKER_QUEUE_SIZE", &cfg.WorkerQueueSize, 100}, {"EMBED_CONCURRENCY", &cfg.EmbedConcurrency, 10},
+		{"MAX_CHUNKS_PER_QUERY", &cfg.MaxChunksPerQuery, 10}, {"CHUNK_TOKEN_SIZE", &cfg.ChunkTokenSize, 512},
+		{"CHUNK_OVERLAP", &cfg.ChunkOverlap, 64}, {"EMBEDDING_DIMENSIONS", &cfg.EmbeddingDimensions, 1024},
+	} {
+		value, err := envIntOrDefault(setting.key, setting.fallback)
+		if err != nil {
+			return nil, err
+		}
+		*setting.dst = value
+	}
+	var err error
+	if cfg.LocalRetrievalThreshold, err = envFloat64OrDefault("LOCAL_RETRIEVAL_THRESHOLD", 0.70); err != nil {
+		return nil, err
+	}
+	if cfg.MaxUploadBytes, err = envInt64OrDefault("MAX_UPLOAD_BYTES", 20971520); err != nil {
+		return nil, err
+	}
+	if cfg.FakeMode, err = envBoolOrDefault("GO_RAG_FAKE_MODE", false); err != nil {
+		return nil, err
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -127,6 +138,34 @@ func (c *Config) validate() error {
 	if c.EmbedConcurrency < 1 || c.EmbedConcurrency > 50 {
 		return fmt.Errorf("config: EMBED_CONCURRENCY must be between 1 and 50, got %d", c.EmbedConcurrency)
 	}
+	port, err := strconv.Atoi(c.ServerPort)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("config: SERVER_PORT must be between 1 and 65535")
+	}
+	if c.ChunkTokenSize < 1 || c.ChunkTokenSize > 8192 {
+		return fmt.Errorf("config: CHUNK_TOKEN_SIZE must be between 1 and 8192")
+	}
+	if c.ChunkOverlap < 0 || c.ChunkOverlap >= c.ChunkTokenSize {
+		return fmt.Errorf("config: CHUNK_OVERLAP must be nonnegative and smaller than CHUNK_TOKEN_SIZE")
+	}
+	if math.IsNaN(c.LocalRetrievalThreshold) || math.IsInf(c.LocalRetrievalThreshold, 0) || c.LocalRetrievalThreshold < 0 || c.LocalRetrievalThreshold > 1 {
+		return fmt.Errorf("config: LOCAL_RETRIEVAL_THRESHOLD must be between 0 and 1")
+	}
+	if c.MaxChunksPerQuery < 1 || c.MaxChunksPerQuery > 100 {
+		return fmt.Errorf("config: MAX_CHUNKS_PER_QUERY must be between 1 and 100")
+	}
+	if c.MaxUploadBytes < 1 || c.MaxUploadBytes > 100<<20 {
+		return fmt.Errorf("config: MAX_UPLOAD_BYTES must be between 1 and 104857600")
+	}
+	if c.EmbeddingDimensions != 256 && c.EmbeddingDimensions != 512 && c.EmbeddingDimensions != 1024 {
+		return fmt.Errorf("config: EMBEDDING_DIMENSIONS must be 256, 512 or 1024")
+	}
+	switch c.SynthesisModel {
+	case "primary", "fallback", "hybrid":
+	default:
+		return fmt.Errorf("config: SYNTHESIS_MODEL must be primary, fallback or hybrid")
+	}
+
 	// Fail closed: a real (non-fake) deployment must set SERVICE_TOKEN so the
 	// mutating/file routes are authenticated. An empty token disables service
 	// auth, which is acceptable only for offline fake mode (dev/CI/QA).
@@ -136,56 +175,41 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func envBoolOrDefault(key string, fallback bool) bool {
+func envBoolOrDefault(key string, fallback bool) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "":
+		return fallback, nil
 	case "1", "true", "yes", "y", "on":
-		return true
+		return true, nil
 	case "0", "false", "no", "n", "off":
-		return false
+		return false, nil
 	default:
-		return fallback
+		return false, fmt.Errorf("config: invalid %s", key)
 	}
 }
-
 func envOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+	if value := os.Getenv(key); value != "" {
+		return value
 	}
 	return fallback
 }
-
-func envIntOrDefault(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
+func parseEnv[T any](key string, fallback T, parse func(string) (T, error)) (T, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
 	}
-	n, err := strconv.Atoi(v)
+	parsed, err := parse(value)
 	if err != nil {
-		return fallback
+		return parsed, fmt.Errorf("config: invalid %s: %w", key, err)
 	}
-	return n
+	return parsed, nil
 }
-
-func envInt64OrDefault(key string, fallback int64) int64 {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return fallback
-	}
-	return n
+func envIntOrDefault(key string, fallback int) (int, error) {
+	return parseEnv(key, fallback, strconv.Atoi)
 }
-
-func envFloat64OrDefault(key string, fallback float64) float64 {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil {
-		return fallback
-	}
-	return f
+func envInt64OrDefault(key string, fallback int64) (int64, error) {
+	return parseEnv(key, fallback, func(value string) (int64, error) { return strconv.ParseInt(value, 10, 64) })
+}
+func envFloat64OrDefault(key string, fallback float64) (float64, error) {
+	return parseEnv(key, fallback, func(value string) (float64, error) { return strconv.ParseFloat(value, 64) })
 }

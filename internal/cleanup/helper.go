@@ -1,75 +1,90 @@
-// Package cleanup provides utilities to clean up test documents from Pinecone and Neon.
+// Package cleanup removes documents and their stored data.
 package cleanup
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/Victoroide/go-ms-rag/internal/config"
+	"github.com/Victoroide/go-ms-rag/internal/domain"
 	pcstore "github.com/Victoroide/go-ms-rag/internal/store/pinecone"
 	pgstore "github.com/Victoroide/go-ms-rag/internal/store/postgres"
-	"github.com/jackc/pgx/v5"
+	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
 )
 
-// CleanupDocument deletes a document and all its data from both Pinecone and Postgres.
-func CleanupDocument(ctx context.Context, cfg *config.Config, docID string) error {
-	// Connect to Postgres
-	pgClient, err := pgstore.NewClient(ctx, cfg.DatabaseURL)
-	if err != nil {
-		return fmt.Errorf("postgres connect: %w", err)
-	}
-	defer pgClient.Close(ctx)
+// ObjectDeleter removes a stored source file.
+type ObjectDeleter interface {
+	Delete(context.Context, string) error
+}
 
-	// Connect to Pinecone
-	pcClient, err := pcstore.NewPineconeClient(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("pinecone connect: %w", err)
-	}
-
-	log.Printf("Cleaning up document: %s", docID)
-
-	// Delete from Pinecone (candidate namespace)
-	if delErr := pcClient.Delete(ctx, "candidate", []string{docID}); delErr != nil {
-		log.Printf("  WARNING: pinecone delete candidate namespace: %v", delErr)
-	} else {
-		log.Printf("  Deleted from Pinecone candidate namespace")
-	}
-
-	// Delete from Pinecone (default namespace)
-	if delErr := pcClient.Delete(ctx, "", []string{docID}); delErr != nil {
-		log.Printf("  WARNING: pinecone delete default namespace: %v", delErr)
-	} else {
-		log.Printf("  Deleted from Pinecone default namespace")
-	}
-
-	// Delete the document's namespace (contains all chunk vectors)
-	if delErr := pcClient.DeleteAllVectorsInNamespace(ctx, docID); delErr != nil {
-		log.Printf("  WARNING: pinecone delete namespace %q: %v", docID, delErr)
-	} else {
-		log.Printf("  Deleted Pinecone namespace %q", docID)
-	}
-
-	// Delete from Postgres
-	conn, err := pgClient.Pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
-	}
-	defer conn.Release()
-
-	batch := &pgx.Batch{}
-	batch.Queue("DELETE FROM chunks WHERE document_id = $1", docID)
-	batch.Queue("DELETE FROM document_fingerprints WHERE document_id = $1", docID)
-	batch.Queue("DELETE FROM documents WHERE id = $1", docID)
-
-	results := conn.SendBatch(ctx, batch)
-	for i := 0; i < 3; i++ {
-		if _, err := results.Exec(); err != nil {
-			log.Printf("  WARNING: postgres delete batch %d: %v", i, err)
+// Remove deletes external data before metadata so failed operations remain retryable.
+func Remove(ctx context.Context, cs domain.ChunkStore, vectors domain.VectorDeleter, objects ObjectDeleter, doc *domain.Document) error {
+	if vectors != nil {
+		if err := vectors.DeleteAllVectorsInNamespace(ctx, string(doc.ID)); err != nil && status.Code(err) != codes.NotFound {
+			return fmt.Errorf("delete document namespace: %w", err)
+		}
+		if err := vectors.DeleteByDocID(ctx, string(doc.ID)); err != nil && status.Code(err) != codes.NotFound {
+			return fmt.Errorf("delete global document vectors: %w", err)
 		}
 	}
-	_ = results.Close()
-
-	log.Printf("  Deleted from Postgres")
+	if objects != nil && doc.S3Key != nil {
+		if err := objects.Delete(ctx, *doc.S3Key); err != nil {
+			return fmt.Errorf("delete source file: %w", err)
+		}
+	}
+	if err := cs.DeleteDocument(ctx, doc.ID); err != nil {
+		return fmt.Errorf("delete document metadata: %w", err)
+	}
 	return nil
+}
+
+// ErrDocumentNotFound indicates that metadata is not yet present or was removed.
+var ErrDocumentNotFound = errors.New("document not found")
+
+// Cleaner reuses store connections for a sequence of document deletions.
+type Cleaner struct {
+	metadata *pgstore.Client
+	vectors  *pcstore.Client
+	objects  ObjectDeleter
+}
+
+// New connects the stores required for document deletion.
+func New(ctx context.Context, cfg *config.Config) (*Cleaner, error) {
+	pg, err := pgstore.NewClient(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("postgres connect: %w", err)
+	}
+	pc, err := pcstore.NewPineconeClient(ctx, cfg)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("pinecone connect: %w", err), pg.Close(ctx))
+	}
+	cleaner := &Cleaner{metadata: pg, vectors: pc}
+	if cfg.S3Bucket != "" {
+		cleaner.objects, err = s3store.New(ctx, cfg)
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("s3 connect: %w", err), cleaner.Close(ctx))
+		}
+	}
+	return cleaner, nil
+}
+
+// Delete removes one stored document and its external data.
+func (c *Cleaner) Delete(ctx context.Context, docID string) error {
+	doc, err := c.metadata.GetDocument(ctx, domain.DocumentID(docID))
+	if err != nil {
+		return err
+	}
+	if doc == nil {
+		return fmt.Errorf("%w: %s", ErrDocumentNotFound, docID)
+	}
+	return Remove(ctx, c.metadata, c.vectors, c.objects, doc)
+}
+
+// Close releases the shared store connections.
+func (c *Cleaner) Close(ctx context.Context) error {
+	return errors.Join(c.vectors.Close(), c.metadata.Close(ctx))
 }

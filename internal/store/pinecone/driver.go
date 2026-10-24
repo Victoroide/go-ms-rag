@@ -8,11 +8,11 @@ import (
 
 // Driver implements the domain.VectorStore interface using Pinecone.
 type Driver struct {
-	client *PineconeClient
+	client *Client
 }
 
 // NewDriver creates a VectorStore backed by Pinecone.
-func NewDriver(ctx context.Context, client *PineconeClient) *Driver {
+func NewDriver(client *Client) *Driver {
 	return &Driver{client: client}
 }
 

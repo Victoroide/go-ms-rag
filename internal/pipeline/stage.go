@@ -13,6 +13,7 @@ import (
 // StageID identifies a pipeline stage.
 type StageID string
 
+// Stage identifiers label pipeline execution results.
 const (
 	StageChunk              StageID = "chunk"
 	StageEmbed              StageID = "embed"

@@ -3,7 +3,7 @@
 // raw extract (NFKC, hyphenation, decoration noise), then walks
 // paragraphs and sentences building chunks that try to honor structure
 // instead of slicing mid-word. Each chunk is tagged with a (kind,
-// quality) classification that retrieval can use to de-prioritise
+// quality) classification that retrieval can use to de-prioritize
 // header / contact noise without losing it.
 package chunker
 
@@ -56,9 +56,6 @@ var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
 //  6. Cross paragraph boundaries with a paragraph-break marker so
 //     prose stays readable inside the chunk text.
 //  7. Tag each emitted chunk with a (kind, quality) classification.
-//
-// The signature is unchanged from the previous implementation so the
-// rest of the pipeline does not need to be updated.
 func (c *Chunker) Chunk(docID domain.DocumentID, text string) []domain.Chunk {
 	cleaned := stripHTML(text)
 	cleaned = textutil.NormalizeForIngest(cleaned)

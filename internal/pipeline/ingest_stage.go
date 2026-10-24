@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/Victoroide/go-ms-rag/internal/chunker"
 	"github.com/Victoroide/go-ms-rag/internal/domain"
@@ -74,21 +73,13 @@ func NewPersistStage(vs domain.VectorStore, cs domain.ChunkStore) *PersistStage 
 // ID returns the stage identifier.
 func (s *PersistStage) ID() StageID { return StagePersist }
 
-// detectDocType determines whether a document is a job posting or a candidate profile.
-func detectDocType(content string) string {
-	if strings.Contains(strings.ToLower(content), "job opening:") {
-		return "job"
-	}
-	return "candidate"
-}
-
 // Run persists chunks to both Pinecone and Postgres.
 // Order: 1) Upsert vectors to Pinecone, 2) Save metadata to Postgres.
 func (s *PersistStage) Run(ctx context.Context, ic *IngestContext) error {
-	// Use explicit doc_type if provided, otherwise auto-detect.
+	// Labels are supplied by callers and never inferred from document content.
 	docType := ic.DocType
 	if docType == "" {
-		docType = detectDocType(ic.RawText)
+		docType = domain.DefaultDocType
 	}
 	if ic.Metadata == nil {
 		ic.Metadata = make(map[string]any)
@@ -116,8 +107,8 @@ func (s *PersistStage) Run(ctx context.Context, ic *IngestContext) error {
 
 	// 3. Insert document record.
 	preview := ic.RawText
-	if len(preview) > 120 {
-		preview = preview[:120]
+	if runes := []rune(preview); len(runes) > 120 {
+		preview = string(runes[:120])
 	}
 	doc := domain.Document{
 		ID:             ic.DocumentID,
@@ -141,7 +132,7 @@ func (s *PersistStage) Run(ctx context.Context, ic *IngestContext) error {
 	// 5. Store fingerprint (after document exists for FK constraint).
 	fp := chunker.Fingerprint(ic.RawText)
 	if err := s.chunkStore.StoreFingerprint(ctx, fp, string(ic.DocumentID)); err != nil {
-		log.Printf("persist_stage: store fingerprint: %v", err)
+		return fmt.Errorf("persist_stage: store fingerprint: %w", err)
 	}
 
 	log.Printf("persist_stage: document=%s doc_type=%s chunks=%d persisted", ic.DocumentID, docType, len(ic.Chunks))

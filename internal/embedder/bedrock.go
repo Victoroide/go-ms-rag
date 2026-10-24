@@ -70,32 +70,6 @@ func (e *BedrockEmbedder) Embed(ctx context.Context, text string) ([]float32, er
 	return e.embedSingle(ctx, text)
 }
 
-// EmbedBatch generates embeddings for multiple texts with bounded concurrency.
-func (e *BedrockEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	results := make([][]float32, len(texts))
-	errCh := make(chan error, len(texts))
-
-	for i, text := range texts {
-		i, text := i, text
-		go func() {
-			emb, err := e.Embed(ctx, text)
-			if err != nil {
-				errCh <- fmt.Errorf("embedder: batch item %d: %w", i, err)
-				return
-			}
-			results[i] = emb
-			errCh <- nil
-		}()
-	}
-
-	for range texts {
-		if err := <-errCh; err != nil {
-			return nil, err
-		}
-	}
-	return results, nil
-}
-
 // Runtime returns the underlying Bedrock runtime client.
 func (e *BedrockEmbedder) Runtime() *bedrockruntime.Client {
 	return e.rt

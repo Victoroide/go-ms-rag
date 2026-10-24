@@ -11,6 +11,7 @@ import (
 // TaskType classifies the purpose of a Bedrock call for routing decisions.
 type TaskType string
 
+// Task types select the appropriate model route.
 const (
 	TaskChunkExtraction    TaskType = "chunk_extraction"
 	TaskQueryDecomposition TaskType = "query_decomposition"
@@ -21,6 +22,7 @@ const (
 // FailureReason describes why a previous attempt failed, driving fallback routing.
 type FailureReason string
 
+// Failure reasons distinguish structured-output and context-limit failures.
 const (
 	FailureNone         FailureReason = ""
 	FailureJSONInvalid  FailureReason = "json_invalid"
@@ -53,7 +55,7 @@ type RoutingRequest struct {
 //	chunk_extraction      -> nova-micro-v1:0
 //	query_decomposition   -> nova-micro-v1:0
 //	sub_query_answer      -> nova-micro-v1:0
-//	synthesis             -> llama4-maverick (always)
+//	synthesis             -> configured primary, fallback or hybrid policy
 //	fallback (any fail)   -> llama4-maverick
 func Route(cfg *config.Config, req RoutingRequest) (modelID, reason string) {
 	// Rule 1: Context exceeds the safe limit for Nova Micro.
@@ -83,7 +85,7 @@ func Route(cfg *config.Config, req RoutingRequest) (modelID, reason string) {
 			}
 			log.Printf("router: task=%s -> %s (synthesis_hybrid_simple)", req.TaskType, cfg.BedrockPrimaryModel)
 			return cfg.BedrockPrimaryModel, "synthesis_hybrid_simple"
-		default: // "fallback" and anything unrecognized
+		default: // "fallback"
 			log.Printf("router: task=%s -> %s (synthesis_via_fallback)", req.TaskType, cfg.BedrockFallbackModel)
 			return cfg.BedrockFallbackModel, "synthesis_via_fallback"
 		}

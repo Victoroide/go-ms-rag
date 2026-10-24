@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -19,14 +20,10 @@ var stopWords = map[string]bool{
 	"for": true, "in": true, "on": true, "at": true, "to": true,
 	"of": true, "with": true, "by": true, "from": true, "is": true,
 	"are": true, "was": true, "were": true, "be": true, "been": true,
-	"job": true, "opening": true, "position": true, "role": true,
-	"senior": true, "junior": true, "mid-level": true, "lead": true,
-	"engineer": true, "developer": true, "manager": true, "architect": true,
-	"software": true, "backend": true, "frontend": true, "fullstack": true,
-	"data": true, "devops": true, "cloud": true, "infrastructure": true,
-	"company": true, "requirements": true, "experience": true, "skills": true,
-	"years": true, "team": true, "about": true, "what": true, "how": true,
-	"which": true, "who": true, "find": true, "list": true, "match": true,
+	"document": true, "reference": true, "guide": true, "report": true,
+	"title": true, "section": true, "summary": true, "overview": true,
+	"what": true, "how": true, "which": true, "who": true, "find": true, "list": true,
+
 	"describe": true, "tell": true, "compare": true, "best": true,
 }
 
@@ -37,10 +34,8 @@ func isStopWord(word string) bool {
 	return stopWords[clean]
 }
 
-// ExtractNamedEntity extracts the first proper noun phrase (person or company
-// name) from a content preview.  It requires at least two consecutive
-// capitalised, non-stop words so that generic titles like "Job Opening" or
-// "Senior Backend Engineer" are ignored.
+// ExtractNamedEntity finds a proper noun phrase with at least two capitalised,
+// non-stop words so generic document titles are ignored.
 func ExtractNamedEntity(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -59,9 +54,10 @@ func ExtractNamedEntity(text string) string {
 			continue
 		}
 
-		// Start collecting a candidate entity phrase.
+		// Start collecting an entity phrase.
 		var entityWords []string
 		entityWords = append(entityWords, word)
+		properWords := 1
 		i++
 
 		for i < len(words) {
@@ -71,6 +67,9 @@ func ExtractNamedEntity(text string) string {
 			isConnector := lower == "de" || lower == "del" || lower == "la" || lower == "von"
 			if isConnector || (isCapitalised(next) && !isStopWord(next)) {
 				entityWords = append(entityWords, next)
+				if !isConnector {
+					properWords++
+				}
 				i++
 			} else {
 				break
@@ -78,12 +77,11 @@ func ExtractNamedEntity(text string) string {
 		}
 
 		// Only accept phrases of 2+ non-connector words as proper entities.
-		if len(entityWords) >= 2 {
+		if properWords >= 2 {
 			return strings.ToLower(strings.Join(entityWords, " "))
 		}
 
 		// Single capitalised word — skip, too ambiguous.
-		entityWords = nil
 	}
 
 	return ""
@@ -94,7 +92,7 @@ func isCapitalised(word string) bool {
 	if word == "" {
 		return false
 	}
-	r := rune(word[0])
+	r, _ := utf8.DecodeRuneInString(word)
 	return unicode.IsLetter(r) && unicode.IsUpper(r)
 }
 
@@ -103,6 +101,7 @@ type entityCache struct {
 	mu        sync.RWMutex
 	entities  map[string]bool
 	fetchedAt time.Time
+	pool      *pgxpool.Pool
 	ttl       time.Duration
 }
 
@@ -114,9 +113,12 @@ var globalEntityCache = &entityCache{
 // FetchNamedEntitiesFromDB retrieves all named entities from document previews
 // Uses a 60-second TTL cache to avoid database round-trips on every query
 func FetchNamedEntitiesFromDB(ctx context.Context, pool *pgxpool.Pool) (map[string]bool, error) {
+	if pool == nil {
+		return map[string]bool{}, nil
+	}
 	// Check cache first
 	globalEntityCache.mu.RLock()
-	if time.Since(globalEntityCache.fetchedAt) < globalEntityCache.ttl && len(globalEntityCache.entities) > 0 {
+	if globalEntityCache.pool == pool && !globalEntityCache.fetchedAt.IsZero() && time.Since(globalEntityCache.fetchedAt) < globalEntityCache.ttl {
 		// Cache hit - return a copy to avoid concurrent modification issues
 		entities := make(map[string]bool)
 		for k, v := range globalEntityCache.entities {
@@ -145,8 +147,8 @@ func FetchNamedEntitiesFromDB(ctx context.Context, pool *pgxpool.Pool) (map[stri
 		entity := ExtractNamedEntity(preview)
 		if entity != "" {
 			entities[entity] = true
-			// Add individual words only for proper noun phrases (person names).
-			// Each word of "laura benitez" is useful; generic words are already
+			// Individual words also help match abbreviated references to named entities.
+			// Each word of "cedar archive" is useful; generic words are already
 			// filtered out by ExtractNamedEntity's stop-word list.
 			for _, word := range strings.Fields(entity) {
 				if len(word) > 2 {
@@ -156,8 +158,13 @@ func FetchNamedEntitiesFromDB(ctx context.Context, pool *pgxpool.Pool) (map[stri
 		}
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read previews: %w", err)
+	}
+
 	// Update cache
 	globalEntityCache.mu.Lock()
+	globalEntityCache.pool = pool
 	globalEntityCache.entities = entities
 	globalEntityCache.fetchedAt = time.Now()
 	globalEntityCache.mu.Unlock()

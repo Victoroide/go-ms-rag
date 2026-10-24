@@ -8,14 +8,14 @@ import (
 
 // ChunkKind describes what the chunk *looks like* semantically.
 // This is a heuristic — never a hard authority — so retrieval and the
-// frontend can de-prioritise low-value evidence without losing it.
+// consumers can de-prioritize low-value evidence without losing it.
 type ChunkKind string
 
 const (
 	// KindBody is the default: real prose, plausibly meaningful content.
 	KindBody ChunkKind = "body"
 	// KindContact means the chunk is dominated by email addresses,
-	// phone numbers and URLs (the typical header of a CV).
+	// phone numbers and URLs (for example, a contact directory).
 	KindContact ChunkKind = "contact"
 	// KindHeader means the chunk is mostly section-title fragments
 	// in all-caps without prose ("EXPERIENCIA EDUCACIÓN HABILIDADES").
@@ -27,6 +27,7 @@ const (
 // should be down-ranked when surfaced as evidence.
 type ChunkQuality string
 
+// Quality levels indicate whether a chunk contains useful evidence.
 const (
 	QualityHigh ChunkQuality = "high"
 	QualityLow  ChunkQuality = "low"

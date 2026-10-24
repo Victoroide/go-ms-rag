@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Victoroide/go-ms-rag/internal/config"
@@ -20,8 +21,7 @@ import (
 // supplies it (non-null), retrieval is restricted to those document ids BEFORE
 // synthesis, so the LLM can never read — let alone summarize — documents the
 // caller is not permitted to see. A null value means "no restriction"; an empty
-// array matches nothing. This is how the Django backend enforces that a company
-// representative only sees CVs of candidates who applied to their own company.
+// array matches nothing. The trusted caller supplies the authorization scope.
 type QueryRequest struct {
 	Query              string   `json:"query"`
 	Mode               string   `json:"mode,omitempty"`
@@ -33,7 +33,7 @@ type QueryRequest struct {
 // ScoredChunkResponse is a single scored chunk in the query response.
 // “kind“ and “quality“ are populated for chunks ingested with the
 // classifier (body/contact/header × high/low) so downstream consumers
-// can de-prioritise low-quality evidence without re-implementing the
+// can de-prioritize low-quality evidence without re-implementing the
 // heuristics. Older chunks ingested before the classifier was added
 // will leave these fields empty; callers must treat that as "unknown".
 type ScoredChunkResponse struct {
@@ -66,11 +66,19 @@ type APIError struct {
 }
 
 func validateQueryRequest(req *QueryRequest) *APIError {
-	if req.Query == "" {
+	if strings.TrimSpace(req.Query) == "" {
 		return &APIError{Error: "validation", Message: "query is required"}
 	}
 	if len(req.Query) > 10000 {
 		return &APIError{Error: "validation", Message: "query exceeds maximum length of 10000 characters"}
+	}
+	switch strings.ToLower(req.Mode) {
+	case "", "auto", "local", "global":
+	default:
+		return &APIError{Error: "validation", Message: "mode must be auto, local or global"}
+	}
+	if req.MaxChunks < 0 || req.MaxChunks > 100 {
+		return &APIError{Error: "validation", Message: "max_chunks must be between 0 and 100"}
 	}
 	return nil
 }
@@ -78,16 +86,16 @@ func validateQueryRequest(req *QueryRequest) *APIError {
 // QueryHandler returns an HTTP handler for POST /query.
 func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Config, pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Type") != "application/json" {
+		if !isJSONRequest(r) {
 			writeJSONError(w, http.StatusUnsupportedMediaType, "validation", "Content-Type must be application/json")
 			return
 		}
 		start := time.Now()
 		var req QueryRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, "validation", "invalid JSON body")
+		if !decodeJSON(w, r, &req, 1<<20) {
 			return
 		}
+
 		if apiErr := validateQueryRequest(&req); apiErr != nil {
 			writeJSONError(w, http.StatusBadRequest, apiErr.Error, apiErr.Message)
 			return
@@ -103,8 +111,8 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 		}
 
 		stages := []pipeline.QueryStage{
-			pipeline.NewDecomposeStage(amb, cfg, pool),
-			pipeline.NewRoutingStage(ret, cfg),
+			pipeline.NewDecomposeStage(pool),
+			pipeline.NewRoutingStage(ret),
 			pipeline.NewRetrievalStage(ret),
 			pipeline.NewSynthesisStage(amb, cfg),
 		}
@@ -129,15 +137,12 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 					quality, _ = q.(string)
 				}
 			}
-			// Send up to 600 chars of chunk text so the Django side
-			// has enough raw material to apply its own snippet
-			// cleanup at retrieval time. The chunk itself can be
-			// larger (~512 tokens / ~2k chars) in Pinecone; we only
-			// truncate over the wire.
+			// Bound response snippets without splitting UTF-8 sequences.
 			text := sc.Chunk.Text
-			if len(text) > 600 {
-				text = text[:600]
+			if runes := []rune(text); len(runes) > 600 {
+				text = string(runes[:600])
 			}
+
 			scoredChunks = append(scoredChunks, ScoredChunkResponse{
 				DocID:      string(sc.Chunk.DocumentID),
 				DocType:    docType,

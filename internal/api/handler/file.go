@@ -2,7 +2,7 @@ package handler
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/Victoroide/go-ms-rag/internal/domain"
@@ -34,7 +34,7 @@ func FileHandler(cs domain.ChunkStore, s3Client *s3store.Client) http.HandlerFun
 		docID := domain.DocumentID(docIDStr)
 		s3Key, err := cs.GetDocumentS3Key(r.Context(), docID)
 		if err != nil {
-			log.Printf("file: get s3 key for %s: %v", docID, err)
+			slog.ErrorContext(r.Context(), "get document file", "document_id", docID, "error", err)
 			writeJSONError(w, http.StatusInternalServerError, "internal", "failed to look up document")
 			return
 		}
@@ -45,7 +45,7 @@ func FileHandler(cs domain.ChunkStore, s3Client *s3store.Client) http.HandlerFun
 
 		presignedURL, err := s3Client.PresignGet(r.Context(), *s3Key)
 		if err != nil {
-			log.Printf("file: presign for %s: %v", *s3Key, err)
+			slog.ErrorContext(r.Context(), "presign document file", "s3_key", *s3Key, "error", err)
 			writeJSONError(w, http.StatusInternalServerError, "internal", "failed to generate download URL")
 			return
 		}
@@ -57,7 +57,7 @@ func FileHandler(cs domain.ChunkStore, s3Client *s3store.Client) http.HandlerFun
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			log.Printf("file: encode response: %v", err)
+			slog.ErrorContext(r.Context(), "encode file response", "error", err)
 		}
 	}
 }

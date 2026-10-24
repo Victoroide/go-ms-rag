@@ -30,8 +30,8 @@ func TestFilterChunksByAllowedDocIDs_NilAllowlistIsNoOp(t *testing.T) {
 }
 
 func TestFilterChunksByAllowedDocIDs_RestrictsToAllowed(t *testing.T) {
-	// Simulates a company rep: only candidate "a" applied to their company,
-	// so "b" (another company's candidate) must never reach synthesis.
+	// Simulates a scoped caller: only document "a" belongs to its scope,
+	// so "b" (another scope's document) must never reach synthesis.
 	in := []domain.ScoredChunk{sc("a", 0.9), sc("b", 0.8), sc("c", 0.7)}
 	got := filterChunksByAllowedDocIDs(in, []string{"a"})
 	if len(got) != 1 || string(got[0].Chunk.DocumentID) != "a" {
@@ -40,7 +40,7 @@ func TestFilterChunksByAllowedDocIDs_RestrictsToAllowed(t *testing.T) {
 }
 
 func TestFilterChunksByAllowedDocIDs_EmptyAllowlistMatchesNothing(t *testing.T) {
-	// A rep with zero applicants must retrieve nothing — never the full corpus.
+	// A caller with zero authorized documents must retrieve nothing — never the full corpus.
 	in := []domain.ScoredChunk{sc("a", 0.9), sc("b", 0.8)}
 	got := filterChunksByAllowedDocIDs(in, []string{})
 	if len(got) != 0 {

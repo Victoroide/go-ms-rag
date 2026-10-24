@@ -1,6 +1,6 @@
 // Package textutil provides text normalization helpers used by the
 // ingestion pipeline. The goal is to clean noise that hurts retrieval
-// quality (PDF extraction artefacts, decorative junk, soft line breaks)
+// quality (PDF extraction artifacts, decorative junk, soft line breaks)
 // while preserving semantic context — paragraph structure, real words,
 // section meaning. Nothing in here is destructive: we never delete real
 // prose, only re-flow it.
@@ -19,11 +19,11 @@ import (
 // matters and is deliberately conservative:
 //
 //  1. NFKC unicode normalization (folds ligatures, full-width digits,
-//     compatibility CJK forms — common PDF artefacts).
+//     compatibility CJK forms — common PDF artifacts).
 //  2. Strip true control characters and zero-width junk, but keep
 //     newlines and tabs since they encode structure.
-//  3. Fix soft hyphenation across line breaks ("develop-\n  oper" →
-//     "developer"). PDF extractors emit these because the original
+//  3. Fix soft hyphenation across line breaks ("docu-\n  ments" →
+//     "documents"). PDF extractors emit these because the original
 //     document was justified.
 //  4. Collapse runs of decorative ASCII (---, ===, ...) and bullet
 //     character runs (•••, ▪▪) into a single space so they don't dilute
@@ -99,7 +99,7 @@ func stripControlExceptStructure(s string) string {
 			continue
 		case unicode.IsControl(r):
 			// Replace control chars with a space so word boundaries
-			// survive (e.g. "Python\x0cDjango" becomes "Python Django").
+			// survive (e.g. "archive\x0crecords" becomes "archive records").
 			b.WriteRune(' ')
 		default:
 			b.WriteRune(r)
@@ -108,7 +108,7 @@ func stripControlExceptStructure(s string) string {
 	return b.String()
 }
 
-// isZeroWidth recognises the zero-width characters that frequently
+// isZeroWidth recognizes the zero-width characters that frequently
 // leak in from PDF/DOCX extraction (most often the BOM and the various
 // zero-width spaces). Encoded by rune value so the Go source file
 // itself stays free of stray BOMs.
