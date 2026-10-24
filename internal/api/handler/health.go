@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Victoroide/go-ms-rag/internal/domain"
-	"github.com/Victoroide/go-ms-rag/internal/llm"
 	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
 )
 
@@ -23,7 +22,7 @@ type HealthStatus struct {
 }
 
 // HealthHandler returns an HTTP handler for GET /health.
-func HealthHandler(vs domain.VectorStore, cs domain.ChunkStore, amb *llm.Ambassador, s3Client *s3store.Client) http.HandlerFunc {
+func HealthHandler(vs domain.VectorStore, cs domain.ChunkStore, s3Client *s3store.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status := HealthStatus{
 			Status:   "ok",

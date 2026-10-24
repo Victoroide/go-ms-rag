@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -80,6 +80,9 @@ func (a *Ambassador) Converse(ctx context.Context, messages []brtypes.Message) (
 			return nil, fmt.Errorf("ambassador: non-retryable error: %w", err)
 		}
 		lastErr = err
+		if attempt == maxRetries {
+			break
+		}
 		delay := backoffDelay(attempt)
 		select {
 		case <-ctx.Done():
@@ -260,6 +263,7 @@ func (a *Ambassador) retryWithCorrection(ctx context.Context, modelID, systemPro
 	if parseErr2 != nil {
 		// Attempt 3: signal reroute to fallback model.
 		log.Printf("ambassador: attempt=3 model=%s -> fallback (JSON retry failed)", modelID)
+		//nolint:nilerr // Invalid structured output is a routing signal, not a transport failure.
 		return &ConverseRoutedResult{
 			NeedsReroute: true,
 			RoutingReq: RoutingRequest{
@@ -302,6 +306,9 @@ func (a *Ambassador) converseWithModel(ctx context.Context, modelID, systemPromp
 				return nil, fmt.Errorf("ambassador: non-retryable error: %w", err)
 			}
 			lastErr = err
+			if attempt == maxRetries {
+				break
+			}
 			delay := backoffDelay(attempt)
 			select {
 			case <-ctx.Done():
@@ -342,6 +349,7 @@ func backoffDelay(attempt int) time.Duration {
 			break
 		}
 	}
+	//nolint:gosec // Retry jitter does not require cryptographic randomness.
 	jitter := time.Duration(rand.Float64() * float64(baseDelay))
 	return delay + jitter
 }

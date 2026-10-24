@@ -3,8 +3,10 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -16,13 +18,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// JSON escaping can expand each content byte sixfold; reserve room for metadata.
+const ingestJSONBodyLimit = 6*domain.MaxContentBytes + 2<<20
+
 // IngestRequest is the POST /ingest request body.
 //
 // DocumentID is optional. When the caller supplies a valid UUID it becomes
 // the persisted document identity (Pinecone namespace + metadata doc_id +
-// Postgres documents.id). This lets upstream systems — e.g. ficct-jobs
-// backend — keep their own primary key as the canonical reference. If
-// omitted or malformed, a fresh UUID is generated server side as before.
+// Postgres documents.id). Callers may keep their own primary key as the
+// canonical reference. Omitted or malformed values generate a fresh UUID.
 type IngestRequest struct {
 	DocumentID string         `json:"document_id,omitempty"`
 	Content    string         `json:"content"`
@@ -37,11 +41,11 @@ type IngestResponse struct {
 }
 
 func validateIngestRequest(req *IngestRequest) *APIError {
-	if req.Content == "" {
+	if strings.TrimSpace(req.Content) == "" {
 		return &APIError{Error: "validation", Message: "content is required"}
 	}
-	if len(req.Content) > 1_000_000 {
-		return &APIError{Error: "validation", Message: "content exceeds maximum length of 1000000 characters"}
+	if len(req.Content) > domain.MaxContentBytes {
+		return &APIError{Error: "validation", Message: "content exceeds maximum length of 1000000 bytes"}
 	}
 	return nil
 }
@@ -75,15 +79,15 @@ func IngestHandler(wk *worker.Worker, cs domain.ChunkStore, s3Client *s3store.Cl
 }
 
 func handleJSONIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker, cs domain.ChunkStore) {
-	if r.Header.Get("Content-Type") != "application/json" {
+	if !isJSONRequest(r) {
 		writeJSONError(rw, http.StatusUnsupportedMediaType, "validation", "Content-Type must be application/json or multipart/form-data")
 		return
 	}
 	var req IngestRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(rw, http.StatusBadRequest, "validation", "invalid JSON body")
+	if !decodeJSON(rw, r, &req, ingestJSONBodyLimit) {
 		return
 	}
+
 	if apiErr := validateIngestRequest(&req); apiErr != nil {
 		writeJSONError(rw, http.StatusBadRequest, apiErr.Error, apiErr.Message)
 		return
@@ -133,16 +137,28 @@ func handleJSONIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker, cs domain.ChunkStore, s3Client *s3store.Client, maxUploadBytes int64) {
 	r.Body = http.MaxBytesReader(rw, r.Body, maxUploadBytes)
 
+	defer func() {
+		if r.MultipartForm != nil {
+			if err := r.MultipartForm.RemoveAll(); err != nil {
+				log.Printf("ingest: remove multipart temporary files: %v", err)
+			}
+		}
+	}()
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		if err.Error() == "http: request body too large" {
-			writeJSONError(rw, http.StatusRequestEntityTooLarge, "validation", "file exceeds maximum size of 20MB")
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSONError(rw, http.StatusRequestEntityTooLarge, "validation", "request body exceeds maximum upload size")
 			return
 		}
 		writeJSONError(rw, http.StatusBadRequest, "validation", "file field is required")
 		return
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			log.Printf("ingest: close file: %v", closeErr)
+		}
+	}()
 
 	ft, err := extractor.DetectFileType(header.Filename)
 	if err != nil {
@@ -153,8 +169,9 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 	// Read the entire file into memory for extraction and S3 upload.
 	fileData, err := io.ReadAll(file)
 	if err != nil {
-		if strings.Contains(err.Error(), "http: request body too large") {
-			writeJSONError(rw, http.StatusRequestEntityTooLarge, "validation", "file exceeds maximum size of 20MB")
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSONError(rw, http.StatusRequestEntityTooLarge, "validation", "request body exceeds maximum upload size")
 			return
 		}
 		writeJSONError(rw, http.StatusBadRequest, "validation", "failed to read file")
@@ -165,7 +182,7 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 	ext := extractor.New(ft)
 	text, extractErr := ext.Extract(r.Context(), bytes.NewReader(fileData))
 	if extractErr != nil {
-		log.Printf("ingest: extract text from %s: %v", header.Filename, extractErr)
+		slog.ErrorContext(r.Context(), "extract uploaded text", "file_name", header.Filename, "error", extractErr)
 		writeJSONError(rw, http.StatusUnprocessableEntity, "extraction", extractErr.Error())
 		return
 	}
@@ -196,21 +213,16 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 	ftStr := string(ft)
 	fileName := header.Filename
 
-	// Upload to S3 in background via the task metadata.
-	// S3 upload is done by the worker for consistency.
 	var s3Key *string
 	if s3Client != nil {
-		// Use explicit doc_type or auto-detect for S3 key path.
 		docType := formDocType
 		if docType == "" {
-			docType = "candidate"
-			if strings.Contains(strings.ToLower(text), "job opening:") {
-				docType = "job"
-			}
+			docType = domain.DefaultDocType
 		}
+
 		key, uploadErr := s3Client.Upload(r.Context(), docID, docType, fileName, ft, bytes.NewReader(fileData))
 		if uploadErr != nil {
-			log.Printf("ingest: s3 upload %s: %v", fileName, uploadErr)
+			slog.ErrorContext(r.Context(), "upload source file", "file_name", fileName, "error", uploadErr)
 			// Non-fatal: continue without S3.
 		} else {
 			s3Key = &key
@@ -227,6 +239,11 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 		DocType:    formDocType,
 	}
 	if !wk.Enqueue(task) {
+		if s3Key != nil {
+			if err := s3Client.Delete(r.Context(), *s3Key); err != nil {
+				log.Printf("ingest: rollback upload: %v", err)
+			}
+		}
 		writeJSONError(rw, http.StatusServiceUnavailable, "queue", "ingest queue is full")
 		return
 	}

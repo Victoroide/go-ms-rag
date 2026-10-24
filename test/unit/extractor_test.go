@@ -19,13 +19,13 @@ func TestDetectFileType(t *testing.T) {
 		want     extractor.FileType
 		wantErr  bool
 	}{
-		{"pdf", "cv.pdf", extractor.FileTypePDF, false},
-		{"docx", "jd.docx", extractor.FileTypeDOCX, false},
+		{"pdf", "document.pdf", extractor.FileTypePDF, false},
+		{"docx", "guide.docx", extractor.FileTypeDOCX, false},
 		{"doc", "old.doc", extractor.FileTypeDOC, false},
 		{"txt unsupported", "data.txt", "", true},
 		{"no extension", "noext", "", true},
 		{"csv unsupported", "data.csv", "", true},
-		{"uppercase pdf", "CV.PDF", extractor.FileTypePDF, false},
+		{"uppercase pdf", "document.PDF", extractor.FileTypePDF, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -156,7 +156,7 @@ func buildMinimalDOCX(text string) []byte {
 </w:document>`
 
 	f, _ := w.Create("word/document.xml")
-	f.Write([]byte(xmlContent))
+	_, _ = f.Write([]byte(xmlContent))
 
 	// Add required content types
 	ct := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -165,8 +165,8 @@ func buildMinimalDOCX(text string) []byte {
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 </Types>`
 	f2, _ := w.Create("[Content_Types].xml")
-	f2.Write([]byte(ct))
+	_, _ = f2.Write([]byte(ct))
 
-	w.Close()
+	_ = w.Close()
 	return buf.Bytes()
 }

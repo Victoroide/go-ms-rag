@@ -1,6 +1,12 @@
 // Package domain defines the core data types shared across the RAG pipeline.
 package domain
 
+// MaxContentBytes bounds decoded document text.
+const MaxContentBytes = 1_000_000
+
+// DefaultDocType is used when a caller omits the document label.
+const DefaultDocType = "document"
+
 // DocumentID uniquely identifies an ingested document.
 type DocumentID string
 

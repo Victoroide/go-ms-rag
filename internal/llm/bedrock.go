@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/Victoroide/go-ms-rag/internal/config"
@@ -33,7 +34,7 @@ type ModelConverser interface {
 type Client struct {
 	rt      *bedrockruntime.Client
 	modelID string
-	maxToks int
+	maxToks int32
 }
 
 // NewClient creates a Bedrock client from the service configuration.
@@ -63,7 +64,7 @@ func NewClient(ctx context.Context, cfg *config.Config) (*Client, error) {
 func (c *Client) Converse(ctx context.Context, messages []brtypes.Message) (*bedrockruntime.ConverseOutput, error) {
 	var temp float32
 	topP := extractionTopP
-	maxToks := int32(c.maxToks)
+	maxToks := c.maxToks
 	input := &bedrockruntime.ConverseInput{
 		ModelId:  aws.String(c.modelID),
 		Messages: messages,
@@ -92,10 +93,16 @@ func (c *Client) ConverseWithModel(ctx context.Context, modelID string, messages
 // in-prompt instruction at the bottom of a long context.
 func (c *Client) ConverseWithModelAndSystem(ctx context.Context, modelID, systemPrompt string, messages []brtypes.Message, temperature float32, maxTokens int) (*bedrockruntime.ConverseOutput, error) {
 	topP := extractionTopP
-	maxToks := int32(maxTokens)
-	if maxToks <= 0 {
-		maxToks = int32(c.maxToks)
+	var maxToks int32
+	switch {
+	case maxTokens <= 0:
+		maxToks = c.maxToks
+	case maxTokens > math.MaxInt32:
+		return nil, fmt.Errorf("llm: output token limit exceeds %d", math.MaxInt32)
+	default:
+		maxToks = int32(maxTokens)
 	}
+
 	input := &bedrockruntime.ConverseInput{
 		ModelId:  aws.String(modelID),
 		Messages: messages,

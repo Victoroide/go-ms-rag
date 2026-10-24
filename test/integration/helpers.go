@@ -1,3 +1,4 @@
+// Package integration exercises service boundaries and persistent storage.
 package integration
 
 import (
@@ -10,15 +11,13 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-var _ = startPostgres
-
 func startPostgres(t *testing.T) string {
 	t.Helper()
 
 	ctx := context.Background()
 	container, err := postgres.Run(
 		ctx,
-		"postgres:16-alpine",
+		"postgres:16.13-alpine3.23",
 		postgres.WithDatabase("rag"),
 		postgres.WithUsername("rag"),
 		postgres.WithPassword("rag"),

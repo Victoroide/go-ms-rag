@@ -20,6 +20,7 @@ const (
 // RetrievalMode selects between local and global retrieval strategies.
 type RetrievalMode string
 
+// Retrieval modes control the search scope.
 const (
 	RetrievalModeLocal  RetrievalMode = "LOCAL"
 	RetrievalModeGlobal RetrievalMode = "GLOBAL"
@@ -146,17 +147,14 @@ func (r *Retriever) DetermineMode(subQueryCount int, topScore float64) Retrieval
 }
 
 // DetermineModeWithQuery decides LOCAL or GLOBAL mode using structural signals only.
-func (r *Retriever) DetermineModeWithQuery(query string, subQueryCount int, topScore float64, namedEntity string) RetrievalMode {
-	// Multiple sub-queries means the decomposition LLM identified
-	// distinct information needs — retrieve broadly.  This is the
-	// highest-priority signal because the LLM is authoritative for
-	// multi-entity detection.
+func (r *Retriever) DetermineModeWithQuery(subQueryCount int, topScore float64, namedEntity string) RetrievalMode {
+	// Multiple information needs take priority over a single named entity.
 	if subQueryCount > 1 {
 		return RetrievalModeGlobal
 	}
 
 	// Named entity from DB on a single sub-query: the query targets
-	// a specific person/company — retrieve locally regardless of
+	// a specific entity — retrieve locally regardless of
 	// similarity score.
 	if namedEntity != "" {
 		return RetrievalModeLocal
@@ -171,21 +169,22 @@ func (r *Retriever) DetermineModeWithQuery(query string, subQueryCount int, topS
 }
 
 // EmbedQuery generates an embedding for a query string.
-func (r *Retriever) EmbedQuery(ctx context.Context, query string) (embedding []float32, topScore float64, err error) {
+func (r *Retriever) EmbedQuery(ctx context.Context, query string) (embedding []float32, topScore float64, probeFailed bool, err error) {
 	embedding, err = r.embedder.Embed(ctx, query)
 	if err != nil {
-		return nil, 0, fmt.Errorf("retriever: embed query: %w", err)
+		return nil, 0, false, fmt.Errorf("retriever: embed query: %w", err)
 	}
 
 	// Get top similarity from global search to help with routing.
 	scored, qErr := r.vectorStore.QueryAllNamespaces(ctx, embedding, 1, "")
 	if qErr != nil {
-		return embedding, 0, nil
+		log.Printf("retriever: routing probe failed; using GLOBAL retrieval: %v", qErr)
+		return embedding, 0, true, nil
 	}
 	if len(scored) > 0 {
 		topScore = scored[0].Score
 	}
-	return embedding, topScore, nil
+	return embedding, topScore, false, nil
 }
 
 func (r *Retriever) retrieveLocal(ctx context.Context, namespace string, embedding []float32, topK int, docTypeFilter string) ([]domain.ScoredChunk, error) {

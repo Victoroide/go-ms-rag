@@ -8,6 +8,7 @@ package memory
 import (
 	"context"
 	"log"
+	"maps"
 	"math"
 	"sort"
 	"sync"
@@ -48,6 +49,7 @@ func (s *FakeVectorStore) Upsert(_ context.Context, namespace string, chunks []d
 		copy(emb, c.Embedding)
 		cp := c
 		cp.Embedding = emb
+		cp.Metadata = maps.Clone(c.Metadata)
 		m[string(c.ID)] = cp
 		stored++
 	}
@@ -87,9 +89,7 @@ func (s *FakeVectorStore) query(namespace string, embedding []float32, topK int,
 			Text:       c.Text,
 			TokenCount: c.TokenCount,
 		}
-		if dt, ok := c.Metadata["doc_type"].(string); ok {
-			out.Metadata = map[string]any{"doc_type": dt}
-		}
+		out.Metadata = maps.Clone(c.Metadata)
 		scored = append(scored, domain.ScoredChunk{
 			Chunk:     out,
 			Score:     cosine(embedding, c.Embedding),
