@@ -1,165 +1,111 @@
 # Deployment
 
-## Prerequisites
+## Container Image
 
-| Dependency | Version | Source |
-|---|---|---|
-| Go | 1.26+ | `go.mod` line 3 |
-| Docker | 27+ | For containerized deployment |
-| AWS account | -- | Bedrock (Titan Embed V2, Nova Micro, Llama4 Maverick) + S3 |
-| Pinecone | -- | Serverless or pod-based index |
-| PostgreSQL | -- | Neon recommended; any PG 14+ works |
+The service is packaged using a multi-stage Docker build that outputs a minimal, non-root runtime container based on Alpine Linux.
 
-Key Go module dependencies (from `go.mod`):
+### Build Stages
 
-| Module | Version |
-|---|---|
-| `github.com/pinecone-io/go-pinecone` | `v1.1.1` |
-| `github.com/jackc/pgx/v5` | `v5.8.0` |
-| `github.com/aws/aws-sdk-go-v2` | `v1.41.4` |
-| `github.com/aws/aws-sdk-go-v2/service/bedrockruntime` | `v1.49.0` |
-| `github.com/aws/aws-sdk-go-v2/service/s3` | `v1.97.1` |
-| `golang.org/x/sync` | `v0.19.0` |
-| `google.golang.org/protobuf` | `v1.36.11` |
+1. **`base`**: Builds on `golang:1.27.3-alpine3.23`, installs compilation tools (`gcc`, `musl-dev`, `git`), and downloads Go modules.
+2. **`test`**: Runs static checks (`go vet ./...`) and the short suite with data race instrumentation (`go test -short ./... -count=1 -race`); Docker-backed tests run in full on the host or CI runner.
+3. **`lint`**: Compiles and executes `golangci-lint` (v2.15.0) against `.golangci.yml`.
+4. **`builder`**: Compiles the statically linked binary (`CGO_ENABLED=0 go build -o /bin/server ./cmd/server`).
+5. **`runtime`**: Builds on `alpine:3.23.4`. Installs CA certificates and timezone data, creates a dedicated system user and group (`app`, numeric UID/GID `10001:10001`), copies the compiled server binary and embedded migration SQL files, and sets the non-root user as the execution user.
 
-## Environment Setup
+For host verification, `make vet`, `make lint` and `make test` run directly with the local Go toolchain; the full test suite needs a Docker daemon. `make ci` runs those gates in order and then builds the runtime image. The image build's short suite skips only the two Docker-backed database tests, with an explicit daemon requirement message.
 
-Create a `.env` file with all required and optional variables. See [configuration.md](configuration.md) for the full list.
+To compile the runtime image:
 
-Required variables (service will not start without these):
-
-```
-AWS_REGION=
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-PINECONE_API_KEY=
-DATABASE_URL=
+```sh
+docker build --target runtime -t go-ms-rag:local .
 ```
 
-Do not commit secrets to version control. Use a `.env` file or a secrets manager.
+To run the container with an environment file:
 
-## Docker Compose
-
-The `docker-compose.yml` defines a single service:
-
-```yaml
-services:
-  app:
-    build:
-      context: .
-      target: runtime
-    ports:
-      - "8081:8081"
-    env_file:
-      - .env
-    restart: unless-stopped
+```sh
+docker run -d \
+  --name go-ms-rag \
+  --user 10001:10001 \
+  --env-file .env \
+  -p 8081:8081 \
+  go-ms-rag:local
 ```
 
-**`app` service:** Builds the Go binary in a multi-stage Docker build and runs it as the sole container. All external dependencies (Postgres, Pinecone, S3, Bedrock) are remote services accessed via environment variables. There is no local database container.
+---
 
-Build and run:
+## Required External Services
 
-```bash
-docker compose up --build -d
+In production deployments (`GO_RAG_FAKE_MODE=false`), the microservice connects to four external cloud services, configured via environment variables.
+
+### 1. PostgreSQL (Metadata and Chunk Store)
+
+- **Version**: PostgreSQL 14 or later.
+- **Extensions**: `pgcrypto` (applied automatically by migration 001).
+- **Configuration**: Provided via `DATABASE_URL`.
+- **Purpose**: Stores document records, status indicators, chunk texts, token counts, and SHA-256 content fingerprints.
+- **Operations**: Startup migrations (001 to 005), duplicate fingerprint lookups, chunk insertion transactions, document status tracking, and inventory listings.
+
+### 2. Pinecone (Vector Index)
+
+- **Configuration**: `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, and optional `PINECONE_ENVIRONMENT`.
+- **Index Dimensions**: Must match `EMBEDDING_DIMENSIONS` (default: 1024).
+- **Metric**: Cosine similarity.
+- **Purpose**: High-dimensional vector search. Chunks are upserted into both a document-specific namespace (named after the document UUID) and the default namespace (`""`) to enable targeted and corpus-wide retrieval.
+
+### 3. AWS Bedrock (Embedding and LLM Models)
+
+- **Configuration**: `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and model identifiers (`BEDROCK_EMBED_MODEL`, `BEDROCK_PRIMARY_MODEL`, `BEDROCK_FALLBACK_MODEL`).
+- **Required Model Access**:
+  - Titan Embed Text V2 (`amazon.titan-embed-text-v2:0`): generates 1024-dimensional normalized text embeddings.
+  - Nova Micro (`amazon.nova-micro-v1:0`): fast, low-latency reasoning and synthesis.
+  - Llama 4 Maverick (`us.meta.llama4-maverick-17b-instruct-v1:0`): synthesis and comparison across multiple retrieved chunks.
+
+### 4. AWS S3 (Raw Object Storage)
+
+- **Configuration**: `S3_BUCKET` (using the same AWS credentials configured for Bedrock).
+- **Purpose**: Stores original binary uploads (PDF, DOCX, DOC) and generates presigned GET download links valid for 15 minutes.
+- **IAM Permissions Required**:
+  - `s3:PutObject` on `arn:aws:s3:::{bucket}/documents/*`
+  - `s3:GetObject` on `arn:aws:s3:::{bucket}/documents/*`
+  - `s3:DeleteObject` on `arn:aws:s3:::{bucket}/documents/*`
+  - `s3:HeadBucket` on `arn:aws:s3:::{bucket}`
+
+---
+
+## Health Probes and Readiness
+
+The service exposes an unauthenticated health probe at `GET /health`.
+
+```sh
+curl localhost:8081/health
 ```
 
-The Dockerfile has four stages:
+- Probes run sequentially against Pinecone, PostgreSQL, and configured S3 storage with a 5-second timeout.
+- Returns HTTP 200 OK with `status: "ok"` when all dependencies respond.
+- Returns HTTP 503 Service Unavailable with `status: "degraded"` if any dependency fails to respond.
+- Use `GET /health` for container orchestrator readiness and liveness checks.
 
-| Stage | Base | Purpose |
-|---|---|---|
-| `base` | `golang:1.26-alpine` | Installs gcc, musl-dev, git. Downloads Go modules. |
-| `test` | `base` | Runs `go vet ./...` and `CGO_ENABLED=1 go test ./... -count=1 -race`. |
-| `lint` | `base` | Installs and runs `golangci-lint` with project config. |
-| `builder` | `base` | Compiles binary: `CGO_ENABLED=0 go build -o /bin/server ./cmd/server`. |
-| `runtime` | `alpine:3.21` | Copies binary + migration SQL files. Exposes port 8081. |
+---
 
-The `docker compose` target is `runtime`, which skips the `test` and `lint` stages. To run those in CI, target them explicitly.
+## Graceful Shutdown
 
-## Database Migrations
+The service handles graceful shutdown when receiving `SIGINT` or `SIGTERM`:
 
-Migrations are embedded in the Go binary via `//go:embed` and applied automatically at startup in `postgres.Client.RunMigrations`. No external migration tool is needed.
+1. Stops accepting new inbound HTTP requests.
+2. Drains active HTTP requests with a 15-second deadline.
+3. Closes the ingestion worker queue and drains buffered ingest tasks with a 15-second deadline.
+4. Closes active Pinecone index client connections.
+5. Closes the PostgreSQL connection pool.
 
-| Migration | What It Does |
-|---|---|
-| `001_init.sql` | Creates `pgcrypto` extension. Creates `documents` table (id, content, metadata, status, chunk_count, created_at). Creates `chunks` table (id, document_id FK CASCADE, chunk_index, text, token_count, created_at). Creates `document_fingerprints` table (fingerprint PK, document_id FK CASCADE, created_at). Adds indexes on `chunks(document_id)` and `document_fingerprints(document_id)`. |
-| `002_add_file_storage.sql` | Adds `file_name TEXT`, `file_type TEXT`, `s3_key TEXT` columns to `documents`. |
-| `003_add_content_preview.sql` | Adds `content_preview TEXT` column to `documents`. Backfills existing rows with `LEFT(content, 120)`. Creates index on `LOWER(content_preview)`. |
-| `004_add_doc_type.sql` | Adds `doc_type TEXT NOT NULL DEFAULT 'candidate'` column to `documents`. Backfills from `metadata->>'doc_type'` where present. |
+Ensure container orchestrators configure a termination grace period of at least 35 seconds to allow HTTP requests, worker drain and the bounded five-second failure-status update to settle before sending `SIGKILL`.
 
-All migrations are idempotent (`IF NOT EXISTS` / `DO $$ ... END $$`).
+---
 
-## S3 Setup
+## Service Token Rotation
 
-Create an S3 bucket matching the `S3_BUCKET` environment variable (default: `ms-go-rag`).
+The `SERVICE_TOKEN` environment variable defines the secret expected in the `X-Service-Token` header. To rotate the token in a production deployment without downtime:
 
-### Required IAM Actions
-
-| Action | Resource | Purpose |
-|---|---|---|
-| `s3:PutObject` | `arn:aws:s3:::{bucket}/documents/*` | File uploads during ingest |
-| `s3:GetObject` | `arn:aws:s3:::{bucket}/documents/*` | Presigned URL generation for file retrieval |
-| `s3:DeleteObject` | `arn:aws:s3:::{bucket}/documents/*` | File deletion via `DELETE /documents/{doc_id}` |
-| `s3:HeadBucket` | `arn:aws:s3:::{bucket}` | Health check probe |
-
-### IAM Policy
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
-      "Resource": "arn:aws:s3:::your-bucket-name/documents/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": ["s3:HeadBucket"],
-      "Resource": "arn:aws:s3:::your-bucket-name"
-    }
-  ]
-}
-```
-
-### Bucket Configuration
-
-- No public access required.
-- Versioning optional (recommended for production).
-- Default encryption (SSE-S3) recommended.
-- No bucket policy or CORS needed for server-side operations. If clients download files via presigned URLs directly, ensure the bucket allows GET from expected origins.
-
-## Pinecone Setup
-
-| Setting | Value |
-|---|---|
-| Index name | Must match `PINECONE_INDEX_NAME` (default: `go-ms-rag`) |
-| Dimension | `1024` (must match `EMBEDDING_DIMENSIONS`) |
-| Metric | `cosine` |
-| Type | Serverless or pod-based |
-
-The service creates namespace-scoped connections on demand. Each document gets its own namespace (namespace = document UUID). All vectors are also written to the default (empty) namespace for global queries.
-
-## First Run Verification
-
-After starting the service, verify with:
-
-```bash
-curl http://localhost:8081/health
-```
-
-Expected response:
-
-```json
-{"status":"ok","pinecone":"ok","neon":"ok","s3":"ok"}
-```
-
-Each probe has a 5-second timeout. If any probe fails, `status` becomes `"degraded"` and the response code is `503`.
-
-## Production Considerations
-
-- **S3 presigned URL TTL:** Hardcoded to 15 minutes. Clients must request a fresh URL if the previous one expires.
-- **Bedrock rate limits:** The service retries on `ThrottlingException` with exponential backoff (max 5 retries, max 30s delay). High query volume may exceed Bedrock quotas; request a quota increase for `InvokeModel` and `Converse` APIs.
-- **Named entity cache TTL:** 60 seconds. After a document is deleted, its named entity may still be cached for up to 60 seconds.
-- **Worker queue:** Single-consumer, sequential processing. If ingest throughput is a bottleneck, increase `WORKER_QUEUE_SIZE` and consider scaling horizontally.
-- **Server timeouts:** Read timeout 30s, write timeout 120s. Synthesis calls to Llama4 Maverick can take several seconds; ensure load balancer timeouts are >= 120s.
-- **Graceful shutdown:** The service listens for SIGINT/SIGTERM, shuts down the worker (waits for in-flight task), and drains HTTP connections with a 15-second deadline.
+1. **Deploy calling services with dual-token support or phased updating**: Update the calling application to present the new token value, or stage the rotation in coordinated steps.
+2. **Update the microservice environment**: Update the `SERVICE_TOKEN` environment variable on the microservice instance.
+3. **Restart the microservice**: Perform a rolling restart of the microservice. In-flight requests presenting the existing token complete within the graceful shutdown window, while subsequent requests use the new token.
+4. **Verify operations**: Send a probe request with the new token to `POST /query` or `GET /documents` to confirm authentication succeeds.

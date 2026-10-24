@@ -1,89 +1,47 @@
 # Configuration
 
-All configuration is loaded from environment variables at startup via `internal/config/config.go`. Required variables cause a fatal startup error if missing.
+Configuration parameters are loaded exclusively from environment variables at startup via `internal/config/config.go`. The service fails fast during startup if required variables are missing if numerical boundaries are violated, or if numeric and boolean values cannot be parsed. Malformed values are errors rather than silent fallbacks.
 
 ## Environment Variables
 
-### Server
+The table below lists every environment variable parsed by the service:
 
-| Variable | Type | Required | Default | Purpose |
+| Variable | Type | Default | Constraints | Description |
 |---|---|---|---|---|
-| `SERVER_PORT` | `string` | no | `8081` | HTTP server listen port |
+| `SERVER_PORT` | string | `"8081"` | 1 to 65535 | TCP port on which the HTTP server listens. |
+| `AWS_REGION` | string | `""` | Valid AWS region identifier | AWS region used for AWS Bedrock API calls and S3 object storage. Required when `GO_RAG_FAKE_MODE=false`. |
+| `AWS_ACCESS_KEY_ID` | string | `""` | Non-empty string | AWS IAM access key ID. Required when `GO_RAG_FAKE_MODE=false`. |
+| `AWS_SECRET_ACCESS_KEY` | string | `""` | Non-empty string | AWS IAM secret access key. Required when `GO_RAG_FAKE_MODE=false`. |
+| `BEDROCK_EMBED_MODEL` | string | `"amazon.titan-embed-text-v2:0"` | Non-empty string | Bedrock model identifier used for generating text embeddings. |
+| `BEDROCK_PRIMARY_MODEL` | string | `"amazon.nova-micro-v1:0"` | Non-empty string | Bedrock model identifier for low-latency reasoning and fast answer synthesis. |
+| `BEDROCK_FALLBACK_MODEL` | string | `"us.meta.llama4-maverick-17b-instruct-v1:0"` | Non-empty string | Bedrock model identifier for answer synthesis and fallback routing. |
+| `PINECONE_API_KEY` | string | `""` | Non-empty string | API key for authenticating with Pinecone vector indices. Required when `GO_RAG_FAKE_MODE=false`. |
+| `PINECONE_INDEX_NAME` | string | `"go-ms-rag"` | Non-empty string | Name of the target Pinecone index. |
+| `PINECONE_ENVIRONMENT` | string | `""` | String | Pinecone cloud environment identifier. |
+| `DATABASE_URL` | string | `""` | Valid PostgreSQL URI | PostgreSQL connection string for document metadata and chunk storage. Always required in all modes. |
+| `WORKER_QUEUE_SIZE` | integer | `100` | 1 to 1000 | In-memory buffered channel capacity for the background ingestion worker. |
+| `EMBED_CONCURRENCY` | integer | `10` | 1 to 50 | Maximum number of concurrent embedding requests dispatched to AWS Bedrock. |
+| `LOCAL_RETRIEVAL_THRESHOLD` | float64 | `0.70` | 0.0 to 1.0 | Cosine similarity threshold for routing single-need queries to LOCAL retrieval mode. |
+| `MAX_CHUNKS_PER_QUERY` | integer | `10` | 1 to 100 | Default and maximum number of chunks returned by the retriever per query. |
+| `CHUNK_TOKEN_SIZE` | integer | `512` | 1 to 8192 | Approximate target token size per text chunk in the sliding window chunker. |
+| `CHUNK_OVERLAP` | integer | `64` | >= 0 and < `CHUNK_TOKEN_SIZE` | Number of overlapping tokens retained between consecutive text chunks. |
+| `EMBEDDING_DIMENSIONS` | integer | `1024` | 256, 512, or 1024 | Output vector dimensions requested from Bedrock Titan Embed V2. |
+| `S3_BUCKET` | string | `"ms-go-rag"` | String | S3 bucket name used for storing raw binary uploads. If empty or initialization fails, source file storage is disabled while text ingestion continues. |
+| `MAX_UPLOAD_BYTES` | int64 | `20971520` (20 MiB) | 1 to 104857600 (100 MiB) | Maximum accepted request payload size for multipart file uploads in bytes. |
+| `SYNTHESIS_MODEL` | string | `"fallback"` | `"primary"`, `"fallback"`, or `"hybrid"` | Model routing policy for query answer synthesis: `"fallback"` uses Llama 4 Maverick, `"primary"` uses Nova Micro, and `"hybrid"` dynamically selects between models based on query complexity. |
+| `GO_RAG_FAKE_MODE` | boolean | `false` | Boolean (`true`, `false`, `1`, `0`) | Runs the service in offline fake mode using an in-memory vector store and mock model generators without AWS or Pinecone credentials. Never enable in production deployments. |
+| `SERVICE_TOKEN` | string | `""` | Non-empty string in real mode | Shared secret token expected in the `X-Service-Token` header on protected endpoints. Required when `GO_RAG_FAKE_MODE=false`. |
 
-### Postgres
+---
 
-| Variable | Type | Required | Default | Purpose |
-|---|---|---|---|---|
-| `DATABASE_URL` | `string` | yes | -- | PostgreSQL connection string (e.g. Neon) |
+## Schema Migrations
 
-### Pinecone
-
-| Variable | Type | Required | Default | Purpose |
-|---|---|---|---|---|
-| `PINECONE_API_KEY` | `string` | yes | -- | Pinecone API key |
-| `PINECONE_INDEX_NAME` | `string` | no | `go-ms-rag` | Pinecone index name |
-| `PINECONE_ENVIRONMENT` | `string` | no | -- | Pinecone environment (not currently used by SDK v1.1.1 but stored in Config) |
-
-### Bedrock (AWS)
-
-| Variable | Type | Required | Default | Purpose |
-|---|---|---|---|---|
-| `AWS_REGION` | `string` | yes | -- | AWS region for Bedrock and S3 |
-| `AWS_ACCESS_KEY_ID` | `string` | yes | -- | AWS IAM access key |
-| `AWS_SECRET_ACCESS_KEY` | `string` | yes | -- | AWS IAM secret key |
-| `BEDROCK_EMBED_MODEL` | `string` | no | `amazon.titan-embed-text-v2:0` | Bedrock embedding model ID |
-| `BEDROCK_PRIMARY_MODEL` | `string` | no | `amazon.nova-micro-v1:0` | Primary LLM model for query decomposition and extraction |
-| `BEDROCK_FALLBACK_MODEL` | `string` | no | `us.meta.llama4-maverick-17b-instruct-v1:0` | Fallback LLM model; always used for synthesis |
-
-### S3
-
-| Variable | Type | Required | Default | Purpose |
-|---|---|---|---|---|
-| `S3_BUCKET` | `string` | no | `ms-go-rag` | S3 bucket name for file uploads |
-| `MAX_UPLOAD_BYTES` | `int64` | no | `20971520` | Maximum file upload size in bytes (20 MB) |
-
-### Retrieval
-
-| Variable | Type | Required | Default | Purpose |
-|---|---|---|---|---|
-| `LOCAL_RETRIEVAL_THRESHOLD` | `float64` | no | `0.70` | Cosine similarity threshold. Scores >= this value route to LOCAL mode (when sub_queries <= 1 and no named entity). Scores below route to GLOBAL. |
-| `MAX_CHUNKS_PER_QUERY` | `int` | no | `10` | Maximum chunks returned per query. Also the default `topK` for Retriever. |
-
-### Chunking & Embedding
-
-| Variable | Type | Required | Default | Purpose |
-|---|---|---|---|---|
-| `CHUNK_TOKEN_SIZE` | `int` | no | `512` | Approximate tokens per chunk (words = tokens / 1.3) |
-| `CHUNK_OVERLAP` | `int` | no | `64` | Token overlap between consecutive chunks |
-| `EMBEDDING_DIMENSIONS` | `int` | no | `1024` | Embedding vector dimension passed to Titan Embed V2 |
-
-### Worker
-
-| Variable | Type | Required | Default | Purpose |
-|---|---|---|---|---|
-| `WORKER_QUEUE_SIZE` | `int` | no | `100` | Buffered channel capacity for ingest queue (valid: 1--1000) |
-| `EMBED_CONCURRENCY` | `int` | no | `10` | Max concurrent Bedrock InvokeModel calls for embeddings (valid: 1--50) |
-
-## Validation
-
-Startup fails if:
-- Any of `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `PINECONE_API_KEY`, `DATABASE_URL` is empty.
-- `WORKER_QUEUE_SIZE` is outside 1--1000.
-- `EMBED_CONCURRENCY` is outside 1--50.
-
-## S3 Configuration
-
-The S3 client uses the same AWS credentials as Bedrock. If `S3_BUCKET` is non-empty, the service initializes the S3 client at startup. If S3 initialization fails, the service continues to operate with file uploads disabled -- a warning is logged. File uploads via `POST /ingest` multipart still extract text and ingest it; only the S3 upload step is skipped.
-
-S3 key structure: `documents/{doc_type}/{doc_id}/{filename}`
-
-## Migrations
-
-Migrations are embedded in the Go binary via `//go:embed` and applied automatically at startup in order. No external migration tool is needed.
+Database schema migrations are written in SQL, embedded directly into the Go binary at compile time via `//go:embed`, and applied sequentially on startup by `internal/store/postgres/client.go`. Migrations are idempotent and run inside transaction boundaries or guard blocks.
 
 | File | Description |
 |---|---|
-| `001_init.sql` | Creates `documents`, `chunks`, `document_fingerprints` tables with pgcrypto extension. Adds indexes on `chunks(document_id)` and `document_fingerprints(document_id)`. |
-| `002_add_file_storage.sql` | Adds `file_name`, `file_type`, `s3_key` columns to `documents`. |
-| `003_add_content_preview.sql` | Adds `content_preview` column to `documents`. Backfills with `LEFT(content, 120)`. Creates index on `LOWER(content_preview)`. |
-| `004_add_doc_type.sql` | Adds `doc_type TEXT NOT NULL DEFAULT 'candidate'` column to `documents`. Backfills from `metadata->>'doc_type'` where present. |
+| `001_init.sql` | Enables the `pgcrypto` extension. Creates the `documents` table, the `chunks` table with foreign key cascading deletion (`ON DELETE CASCADE`), and the `document_fingerprints` deduplication table with indexing. |
+| `002_add_file_storage.sql` | Adds nullable columns `file_name`, `file_type`, and `s3_key` to `documents` to track raw uploaded files stored in S3. |
+| `003_add_content_preview.sql` | Adds the `content_preview` column to `documents`, backfills existing rows with the first 120 characters of `content`, and creates a functional index on `LOWER(content_preview)`. |
+| `004_add_doc_type.sql` | Adds the `doc_type` column to `documents` and backfills values from `metadata->>'doc_type'`. |
+| `005_document_default.sql` | Sets the default column value for `doc_type` in `documents` to `'document'`. |

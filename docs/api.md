@@ -1,287 +1,348 @@
 # API Reference
 
-All endpoints return `Content-Type: application/json`. Error responses use the `APIError` struct:
+All API responses use `Content-Type: application/json`. Error responses follow a uniform structured JSON format:
 
 ```json
-{"error": "<error_type>", "message": "<human_readable_message>"}
+{
+  "error": "<error_category>",
+  "message": "<descriptive_message>"
+}
 ```
+
+## Authentication
+
+When `SERVICE_TOKEN` is configured, all mutating and sensitive endpoints require the `X-Service-Token` HTTP header matching the configured token value:
+- `POST /ingest`
+- `POST /query`
+- `GET /documents`
+- `GET /documents/{doc_id}/file`
+- `DELETE /documents/{doc_id}`
+
+Requests missing or presenting an incorrect token receive `401 Unauthorized`. Header comparisons are performed in constant time using `crypto/subtle.ConstantTimeCompare`. The `GET /health` endpoint is public and does not require authentication.
 
 ---
 
+## Endpoints
+
 ### GET /health
 
-**Description:** Returns service health status including connectivity to Pinecone, PostgreSQL (Neon), and S3.
+Returns service health status and ping probes for backing data stores.
 
-**Request**
+- **Method**: `GET`
+- **Path**: `/health`
+- **Auth**: None (public)
+- **Request Body**: None
 
-No body. No parameters.
+#### Responses
 
-**Response 200 (all healthy)**
+- **200 OK**: All dependency probes responded within the 5-second timeout.
+- **503 Service Unavailable**: One or more backing stores failed to respond within the timeout.
+
+Response payload fields:
 
 | Field | Type | Description |
 |---|---|---|
-| `status` | `string` | `"ok"` when all probes pass |
-| `pinecone` | `string` | `"ok"` or `"unreachable"` |
-| `neon` | `string` | `"ok"` or `"unreachable"` |
-| `s3` | `string` | `"ok"` or `"unreachable"` |
+| `status` | string | `"ok"` if all dependencies respond, or `"degraded"` if any probe fails |
+| `pinecone` | string | `"ok"` or `"unreachable"` |
+| `neon` | string | `"ok"` or `"unreachable"` |
+| `s3` | string | `"ok"` or `"unreachable"` |
 
-**Response 503 (degraded)**
+#### Example
 
-Same fields, but `status` is `"degraded"` and at least one probe is `"unreachable"`.
-
-**Error Responses**
-
-| HTTP | Condition |
-|---|---|
-| 503 | One or more dependencies unreachable (5s timeout per probe) |
-
-**Side Effects**
-
-None. Read-only health probes.
-
-**Example**
-
-```bash
-curl http://localhost:8081/health
+```sh
+curl localhost:8081/health
 ```
 
 ---
 
 ### POST /ingest
 
-**Description:** Ingests a document for chunking, embedding, and vector storage. Supports two content types: JSON body or multipart file upload.
+Ingests textual content or document files for chunking, embedding generation, vector indexing, and relational storage. Supports JSON payloads and multipart file uploads.
 
-#### JSON Variant
+- **Method**: `POST`
+- **Path**: `/ingest`
+- **Auth**: Required (`X-Service-Token`)
 
-**Request**
+#### Variant A: JSON Request
 
-Content-Type: `application/json`
+- **Content-Type**: `application/json` (accepts standard parameters such as `charset=utf-8`)
+- **Body Limit**: 8,097,152 bytes (six times the decoded-content limit plus 2 MiB of overhead)
+
+Request fields:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `content` | `string` | yes | Document text (max 1,000,000 characters) |
-| `metadata` | `object` | no | Arbitrary key-value metadata |
-| `doc_type` | `string` | no | Explicit document type override (`"candidate"`, `"job"`, etc.). If omitted, auto-detected by PersistStage. |
+| `content` | string | yes | Document text content (maximum 1,000,000 bytes after JSON decoding) |
+| `doc_type` | string | no | Document category label. Defaults to `"document"` if omitted |
+| `document_id` | string | no | Optional document UUID. When a valid UUID is provided, it is retained as the document identifier. Otherwise, a fresh UUID is generated |
+| `metadata` | object | no | Optional arbitrary key-value metadata object stored in PostgreSQL and vector metadata |
 
-**Response 202 (new document)**
+Response (New Document):
+- **Status**: `202 Accepted`
 
-| Field | Type | Description |
-|---|---|---|
-| `document_id` | `string` | UUID of the new document |
-| `status` | `string` | `"processing"` |
-
-**Response 200 (duplicate)**
-
-| Field | Type | Description |
-|---|---|---|
-| `document_id` | `string` | UUID of the existing document |
-| `status` | `string` | `"already_ingested"` |
-
-**Error Responses**
-
-| HTTP | `error` | `message` |
-|---|---|---|
-| 400 | `validation` | `"invalid JSON body"` |
-| 400 | `validation` | `"content is required"` |
-| 400 | `validation` | `"content exceeds maximum length of 1000000 characters"` |
-| 415 | `validation` | `"Content-Type must be application/json or multipart/form-data"` |
-| 503 | `queue` | `"ingest queue is full"` |
-
-**Side Effects**
-
-- Computes SHA-256 fingerprint of content and checks for duplicates in Postgres.
-- On new document: enqueues `IngestTask` to worker. Worker runs ChunkStage -> EmbedStage -> PersistStage, which upserts vectors to Pinecone (document namespace + default namespace), inserts document/chunk records to Postgres, stores fingerprint.
-
-**Example**
-
-```bash
-curl -X POST http://localhost:8081/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"content":"Sofia Mamani - Backend Engineer...","doc_type":"candidate"}'
+```json
+{
+  "document_id": "8a3e792c-5df6-4b6e-a612-4f7db4959db2",
+  "status": "processing"
+}
 ```
 
-#### Multipart Variant
+Response (Duplicate Document):
+- **Status**: `200 OK`
 
-**Request**
+```json
+{
+  "document_id": "8a3e792c-5df6-4b6e-a612-4f7db4959db2",
+  "status": "already_ingested"
+}
+```
 
-Content-Type: `multipart/form-data`
+Error Status Codes:
+
+| Status | Error Category | Condition |
+|---|---|---|
+| `400 Bad Request` | `validation` | Content field missing, empty, blank whitespace, or exceeding 1,000,000 decoded bytes; trailing characters after JSON body; malformed JSON |
+| `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
+| `413 Payload Too Large` | `validation` | JSON request payload exceeds 8,097,152 bytes |
+| `415 Unsupported Media Type` | `validation` | Content-Type is not `application/json` or `multipart/form-data` |
+| `503 Service Unavailable` | `queue` | Ingest worker channel queue is full (`WORKER_QUEUE_SIZE` reached) |
+
+Example:
+
+```sh
+curl -X POST localhost:8081/ingest \
+  -H "X-Service-Token: dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Operational procedures for network routing nodes...",
+    "doc_type": "handbook",
+    "metadata": {
+      "author": "infrastructure-team",
+      "version": "1.4"
+    }
+  }'
+```
+
+#### Variant B: Multipart Form Upload
+
+- **Content-Type**: `multipart/form-data`
+- **Body Limit**: Bounded by `MAX_UPLOAD_BYTES` (default 20,971,520 bytes = 20 MiB)
+
+Form fields:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `file` | file | yes | PDF, DOCX, or DOC file (max 20MB, controlled by `MAX_UPLOAD_BYTES`) |
-| `doc_type` | `string` | no | Explicit document type override. If omitted, auto-detected from extracted text. |
+| `file` | file binary | yes | Binary file to extract and ingest. Accepted formats: PDF, DOCX, DOC |
+| `doc_type` | string | no | Document category label. Defaults to `"document"` if omitted |
 
-**Response 202 (new document)**
+Error Status Codes:
 
-Same as JSON variant.
-
-**Response 200 (duplicate)**
-
-Same as JSON variant.
-
-**Error Responses**
-
-| HTTP | `error` | `message` |
+| Status | Error Category | Condition |
 |---|---|---|
-| 400 | `validation` | `"file field is required"` |
-| 413 | `validation` | `"file exceeds maximum size of 20MB"` |
-| 415 | `validation` | `"unsupported file type, accepted: pdf, docx, doc"` |
-| 422 | `extraction` | (extraction error message) |
-| 503 | `queue` | `"ingest queue is full"` |
+| `400 Bad Request` | `validation` | Form `file` part missing or read error |
+| `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
+| `413 Payload Too Large` | `validation` | Upload exceeds `MAX_UPLOAD_BYTES` |
+| `415 Unsupported Media Type` | `validation` | Uploaded file extension is not pdf, docx, or doc |
+| `422 Unprocessable Entity` | `extraction` | Document text extraction failed (e.g., malformed binary structure or expanded DOCX XML exceeding 16 MiB, PDF text exceeding 1,000,000 bytes, or PDF extraction work exceeding its limits) |
+| `503 Service Unavailable` | `queue` | Ingest worker channel queue is full; rolls back S3 object if uploaded |
 
-**Side Effects**
+Example:
 
-- Extracts text from the uploaded file.
-- Computes fingerprint of extracted text and checks for duplicates.
-- Uploads the original file to S3 at `documents/{doc_type}/{doc_id}/{filename}` (non-fatal if S3 fails).
-- Enqueues `IngestTask` with `FileName`, `FileType`, `S3Key`, and `DocType` fields set.
-
-**Example**
-
-```bash
-curl -X POST http://localhost:8081/ingest \
-  -F "file=@resume.pdf" \
-  -F "doc_type=candidate"
+```sh
+curl -X POST localhost:8081/ingest \
+  -H "X-Service-Token: dev-token" \
+  -F "file=@technical_paper.pdf" \
+  -F "doc_type=research"
 ```
 
 ---
 
 ### POST /query
 
-**Description:** Queries the RAG pipeline with adaptive local/global retrieval and LLM-based answer synthesis.
+Executes vector similarity search and synthesizes an answer grounded in the retrieved document corpus.
 
-**Request**
+- **Method**: `POST`
+- **Path**: `/query`
+- **Auth**: Required (`X-Service-Token`)
+- **Content-Type**: `application/json`
+- **Body Limit**: 1 MiB (1,048,576 bytes)
 
-Content-Type: `application/json`
+Request fields:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `query` | `string` | yes | Query text (max 10,000 characters) |
-| `mode` | `string` | no | Retrieval mode: `"auto"` (default), `"local"`, or `"global"`. Case-insensitive. |
-| `filter_doc_type` | `string` | no | If set, only chunks with matching `doc_type` metadata are returned from Pinecone. |
-| `max_chunks` | `int` | no | Maximum chunks to retrieve. Defaults to `MAX_CHUNKS_PER_QUERY` (10). |
+| `query` | string | yes | Natural-language query string (1 to 10,000 decoded bytes) |
+| `mode` | string | no | Retrieval mode: `"auto"` (default), `"local"`, or `"global"`. Case-insensitive |
+| `filter_doc_type` | string | no | Restricts vector retrieval to chunks matching the given `doc_type` |
+| `max_chunks` | int | no | Maximum chunks to retrieve (0 to 100). Defaults to `MAX_CHUNKS_PER_QUERY` (10) |
+| `allowed_document_ids` | array of strings | no | Optional tenant/role allowlist of document UUIDs. When omitted (`null`), retrieval is unrestricted. When provided as an empty list (`[]`), all chunks are excluded. Filters chunks before LLM synthesis |
 
-**Response 200**
-
-| Field | Type | Description |
-|---|---|---|
-| `answer` | `string` | Synthesized answer from LLM |
-| `mode` | `string` | Retrieval mode used: `"LOCAL"` or `"GLOBAL"` |
-| `chunks_used` | `int` | Number of chunks used in synthesis |
-| `token_usage` | `object` | LLM token consumption |
-| `token_usage.input_tokens` | `int32` | Tokens sent to LLM |
-| `token_usage.output_tokens` | `int32` | Tokens generated by LLM |
-| `token_usage.total_tokens` | `int32` | Sum of input + output |
-| `scored_chunks` | `array` | Per-chunk scoring details |
-
-Each element in `scored_chunks`:
+Response fields (200 OK):
 
 | Field | Type | Description |
 |---|---|---|
-| `doc_id` | `string` | Document UUID the chunk belongs to |
-| `doc_type` | `string` | Document type from chunk metadata (e.g. `"candidate"`, `"job"`) |
-| `chunk_index` | `int` | Zero-based chunk position within the document |
-| `score` | `float64` | Cosine similarity score from Pinecone |
-| `text` | `string` | Chunk text, truncated to 200 characters |
+| `answer` | string | Grounded answer in the question's language when evidence exists; fixed English no-information answer otherwise |
+| `mode` | string | Retrieval mode executed: `"LOCAL"` or `"GLOBAL"` |
+| `chunks_used` | int | Count of chunks retrieved from the vector store |
+| `context_chunks` | int | Count of chunks retained after score thresholding and passed into the LLM context (optional) |
+| `context_tokens` | int | Estimated token count of the prompt context (optional) |
+| `early_exit` | bool | Indicates whether query execution completed early (optional) |
+| `stage_timings_ms` | map[string]int64 | Execution timings for pipeline stages in milliseconds (optional) |
+| `token_usage` | object | LLM token usage metrics (`input_tokens`, `output_tokens`, `total_tokens`) |
+| `scored_chunks` | array | Retrieved chunks ordered by similarity score |
 
-**Error Responses**
+If retrieval or the document allowlist leaves no evidence, the answer is `No relevant information was found to answer this question.` No synthesis model is called, `token_usage` fields are zero, and `early_exit` is true. A transient similarity-probe failure selects GLOBAL retrieval in automatic mode instead of failing the query; embedding or subsequent retrieval failures still return 500.
 
-| HTTP | `error` | `message` |
+Scored chunk fields:
+
+| Field | Type | Description |
 |---|---|---|
-| 400 | `validation` | `"invalid JSON body"` |
-| 400 | `validation` | `"query is required"` |
-| 400 | `validation` | `"query exceeds maximum length of 10000 characters"` |
-| 415 | `validation` | `"Content-Type must be application/json"` |
-| 500 | `pipeline` | (pipeline error message) |
+| `doc_id` | string | Document UUID the chunk belongs to |
+| `doc_type` | string | Document category label |
+| `chunk_index` | int | Position index of the chunk within the source document |
+| `score` | float64 | Cosine similarity score |
+| `text` | string | Chunk text excerpt, truncated safely to a maximum of 600 runes without splitting UTF-8 characters |
+| `kind` | string | Classification category if populated during ingestion (optional) |
+| `quality` | string | Quality rating if populated during ingestion (optional) |
 
-**Side Effects**
+Error Status Codes:
 
-None. Read-only. Calls Bedrock for query decomposition and synthesis, queries Pinecone for vector search.
+| Status | Error Category | Condition |
+|---|---|---|
+| `400 Bad Request` | `validation` | Query missing, empty, or whitespace; query exceeding 10,000 decoded bytes; mode not auto, local, or global; max_chunks outside 0-100; trailing JSON data; malformed JSON |
+| `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
+| `413 Payload Too Large` | `validation` | Request body exceeds the 1 MiB limit |
+| `415 Unsupported Media Type` | `validation` | Content-Type is not `application/json` |
+| `500 Internal Server Error` | `pipeline` | Unhandled error in query decomposition, embedding, vector retrieval, or model synthesis |
 
-**Example**
+Example:
 
-```bash
-curl -X POST http://localhost:8081/query \
+```sh
+curl -X POST localhost:8081/query \
+  -H "X-Service-Token: dev-token" \
   -H "Content-Type: application/json" \
-  -d '{"query":"Which candidates have Python experience?","filter_doc_type":"candidate","mode":"auto"}'
+  -d '{
+    "query": "Which routing algorithms are supported in version 2?",
+    "mode": "auto",
+    "filter_doc_type": "handbook",
+    "max_chunks": 5
+  }'
+```
+
+---
+
+### GET /documents
+
+Returns metadata references for all stored documents. Used by calling services for inventory verification and orphan vector reconciliation.
+
+- **Method**: `GET`
+- **Path**: `/documents`
+- **Auth**: Required (`X-Service-Token`)
+- **Request Body**: None
+
+Response fields (200 OK):
+
+| Field | Type | Description |
+|---|---|---|
+| `documents` | array | List of stored document references |
+| `count` | int | Total number of documents returned |
+
+Document reference fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `document_id` | string | Document UUID |
+| `doc_type` | string | Document category label |
+| `s3_key` | string | S3 object key, or omitted if no binary file was stored |
+
+Error Status Codes:
+
+| Status | Error Category | Condition |
+|---|---|---|
+| `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
+| `500 Internal Server Error` | `internal` | Database query failure |
+
+Example:
+
+```sh
+curl localhost:8081/documents \
+  -H "X-Service-Token: dev-token"
 ```
 
 ---
 
 ### GET /documents/{doc_id}/file
 
-**Description:** Returns a presigned S3 URL for downloading the original uploaded file.
+Generates a presigned S3 URL for downloading the original binary file associated with an ingested document.
 
-**Request**
+- **Method**: `GET`
+- **Path**: `/documents/{doc_id}/file`
+- **Auth**: Required (`X-Service-Token`)
+- **Parameters**: `doc_id` (path parameter, must be a valid UUID)
+- **Request Body**: None
 
-No body. `{doc_id}` must be a valid UUID in the URL path.
-
-**Response 200**
+Response fields (200 OK):
 
 | Field | Type | Description |
 |---|---|---|
-| `url` | `string` | Presigned S3 GET URL |
-| `expires_in` | `int` | URL validity in seconds (always `900` = 15 minutes) |
+| `url` | string | Presigned GET URL generated for the S3 object |
+| `expires_in` | int | URL validity duration in seconds (always 900 seconds = 15 minutes) |
 
-**Error Responses**
+Error Status Codes:
 
-| HTTP | `error` | `message` |
+| Status | Error Category | Condition |
 |---|---|---|
-| 400 | `validation` | `"invalid path"` |
-| 400 | `validation` | `"doc_id must be a valid UUID"` |
-| 404 | `not_found` | `"no file stored for this document"` |
-| 500 | `internal` | `"failed to look up document"` |
-| 500 | `internal` | `"failed to generate download URL"` |
+| `400 Bad Request` | `validation` | Invalid path or `doc_id` is not a valid UUID |
+| `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
+| `404 Not Found` | `not_found` | S3 storage not configured or no file stored for the requested document |
+| `500 Internal Server Error` | `internal` | Database lookup failure or error generating presigned URL |
 
-**Side Effects**
+Example:
 
-None. Reads S3 key from Postgres, generates presigned URL.
-
-**Example**
-
-```bash
-curl http://localhost:8081/documents/550e8400-e29b-41d4-a716-446655440000/file
+```sh
+curl localhost:8081/documents/8a3e792c-5df6-4b6e-a612-4f7db4959db2/file \
+  -H "X-Service-Token: dev-token"
 ```
 
 ---
 
 ### DELETE /documents/{doc_id}
 
-**Description:** Deletes a document and all associated data from Pinecone, S3, and Postgres.
+Deletes a document and all related artifacts across Pinecone, S3, and PostgreSQL.
 
-**Request**
+- **Method**: `DELETE`
+- **Path**: `/documents/{doc_id}`
+- **Auth**: Required (`X-Service-Token`)
+- **Parameters**: `doc_id` (path parameter, must be a valid UUID)
+- **Request Body**: None
 
-No body. `{doc_id}` must be a valid UUID in the URL path.
+Deletion ordering:
+1. Deletes all vector entries in the Pinecone document namespace (`doc_id`).
+2. Deletes vector entries in the Pinecone default namespace where metadata `doc_id` matches.
+3. Deletes the original uploaded file from S3 if an `s3_key` exists.
+4. Deletes the document record from PostgreSQL (cascading foreign keys remove rows in `chunks` and `document_fingerprints`).
 
-**Response 200**
+If an error occurs while deleting vectors or object storage, PostgreSQL metadata is preserved so the operation can be retried, and the request returns `500 Internal Server Error`.
+
+Response fields (200 OK):
 
 | Field | Type | Description |
 |---|---|---|
-| `deleted` | `bool` | Always `true` on success |
-| `doc_id` | `string` | The deleted document's UUID |
+| `deleted` | bool | Always `true` on successful deletion |
+| `doc_id` | string | UUID of the deleted document |
 
-**Error Responses**
+Error Status Codes:
 
-| HTTP | `error` | `message` |
+| Status | Error Category | Condition |
 |---|---|---|
-| 400 | `validation` | `"invalid path"` |
-| 400 | `validation` | `"doc_id must be a valid UUID"` |
-| 404 | `not_found` | `"document not found"` |
-| 500 | `internal` | `"failed to delete document"` |
+| `400 Bad Request` | `validation` | Invalid path or `doc_id` is not a valid UUID |
+| `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
+| `404 Not Found` | `not_found` | Document does not exist in PostgreSQL |
+| `500 Internal Server Error` | `internal` | Database query failure or external deletion error in Pinecone or S3 |
 
-**Side Effects**
+Example:
 
-Executes in order:
-1. Queries Postgres for the document (verifies existence, retrieves `s3_key`).
-2. Deletes all vectors in the Pinecone namespace matching `doc_id` (via `DeleteAllVectorsInNamespace`).
-3. Deletes vectors from the default Pinecone namespace where metadata `doc_id` matches (via `DeleteVectorsByFilter`).
-4. Deletes the file from S3 if `s3_key` is not null.
-5. Deletes the document from Postgres (cascades to `chunks` and `document_fingerprints` via FK ON DELETE CASCADE).
-
-Pinecone and S3 errors are logged but do not fail the request. Only a Postgres delete failure returns HTTP 500.
-
-**Example**
-
-```bash
-curl -X DELETE http://localhost:8081/documents/550e8400-e29b-41d4-a716-446655440000
+```sh
+curl -X DELETE localhost:8081/documents/8a3e792c-5df6-4b6e-a612-4f7db4959db2 \
+  -H "X-Service-Token: dev-token"
 ```
