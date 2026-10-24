@@ -1,0 +1,47 @@
+name: Feature request
+description: Propose a specific change to the service.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Proposed change
+      description: Summarize the behavior you want in one sentence.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - API and authentication
+        - Ingestion and extraction
+        - Retrieval and chunking
+        - Storage
+        - Operations and documentation
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the use case and what cannot be done today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior and alternatives
+      description: Explain how a caller would use the change and what alternatives you considered.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this request.
+          required: true
+        - label: I described the expected behavior without including private data.
+          required: true

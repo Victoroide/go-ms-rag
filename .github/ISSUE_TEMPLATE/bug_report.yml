@@ -1,0 +1,55 @@
+name: Bug report
+description: Report behavior that differs from the documented service contract.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: For security findings, follow SECURITY.md instead of opening an issue.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Provide the commit hash or release tag you tested.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Runtime mode
+      options:
+        - Local offline mode
+        - Configured external services
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include a minimal request and a synthetic input document when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Include the response status and explain the difference.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and logs
+      description: Include the operating system, runtime version and relevant sanitized logs.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for the same behavior.
+          required: true
+        - label: I removed credentials, signed download links and sensitive data.
+          required: true
