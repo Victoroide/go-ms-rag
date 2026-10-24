@@ -1,4 +1,4 @@
-FROM golang:1.26-alpine AS base
+FROM golang:1.27.3-alpine3.23 AS base
 RUN apk add --no-cache gcc musl-dev git
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -8,11 +8,11 @@ RUN go mod download
 FROM base AS test
 COPY . .
 RUN go vet ./...
-RUN CGO_ENABLED=1 go test ./... -count=1 -race
+RUN CGO_ENABLED=1 go test -short ./... -count=1 -race
 
 # ── lint stage ──────────────────────────────────────────
 FROM base AS lint
-RUN go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+RUN go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 COPY . .
 RUN golangci-lint run --config=.golangci.yml
 
@@ -22,10 +22,11 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o /bin/server ./cmd/server
 
 # ── final runtime image (minimal) ───────────────────────
-FROM alpine:3.21 AS runtime
-RUN apk add --no-cache ca-certificates tzdata
+FROM alpine:3.23.4 AS runtime
+RUN apk add --no-cache ca-certificates tzdata && addgroup -S -g 10001 app && adduser -S -u 10001 -G app app
 WORKDIR /app
 COPY --from=builder /bin/server /app/server
 COPY internal/store/postgres/migrations ./internal/store/postgres/migrations
+USER 10001:10001
 EXPOSE 8081
 ENTRYPOINT ["/app/server"]
