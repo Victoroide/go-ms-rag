@@ -1,95 +1,53 @@
-// Package main provides a cleanup utility to delete test documents from Pinecone and Neon.
+// Package main deletes the explicitly supplied document identifiers.
 package main
 
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
+	"time"
 
+	"github.com/Victoroide/go-ms-rag/internal/cleanup"
 	"github.com/Victoroide/go-ms-rag/internal/config"
-	pcstore "github.com/Victoroide/go-ms-rag/internal/store/pinecone"
-	pgstore "github.com/Victoroide/go-ms-rag/internal/store/postgres"
-	"github.com/jackc/pgx/v5"
+	"github.com/google/uuid"
 )
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatalf("cleanup error: %v", err)
+		slog.Error("delete documents", "error", err)
+		os.Exit(1)
 	}
 }
-
 func run() error {
-	ctx := context.Background()
-
-	// Load config
+	ids := os.Args[1:]
+	if len(ids) == 0 {
+		return fmt.Errorf("provide at least one document UUID")
+	}
+	for _, id := range ids {
+		if _, err := uuid.Parse(id); err != nil {
+			return fmt.Errorf("invalid document id: %w", err)
+		}
+	}
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
-
-	// Test document IDs to delete
-	testDocIDs := []string{
-		"a15fc9bc-d80d-4fbe-979f-0e60b5ae0032", // Large file test
-		"97d7d355-6eef-4559-8f49-dd0ff3e4f8a3", // Smoke test Maria Garcia
-		"f9fa6418-6b0d-43a0-b73c-24b641ff4a17", // JSON ingest test
-	}
-
-	// Connect to Postgres
-	pgClient, err := pgstore.NewClient(ctx, cfg.DatabaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cleaner, err := cleanup.New(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("postgres connect: %w", err)
+		return err
 	}
-	defer pgClient.Close(ctx)
-
-	// Connect to Pinecone
-	pcClient, err := pcstore.NewPineconeClient(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("pinecone connect: %w", err)
+	defer func() {
+		if err := cleaner.Close(ctx); err != nil {
+			slog.Error("close document stores", "error", err)
+		}
+	}()
+	for _, id := range ids {
+		if err := cleaner.Delete(ctx, id); err != nil {
+			return fmt.Errorf("delete %s: %w", id, err)
+		}
 	}
-
-	log.Printf("Deleting %d test documents...", len(testDocIDs))
-
-	for _, docID := range testDocIDs {
-		log.Printf("Processing document: %s", docID)
-
-		// Delete from Pinecone (candidate namespace)
-		if err := pcClient.Delete(ctx, "candidate", []string{docID}); err != nil {
-			log.Printf("  WARNING: pinecone delete candidate namespace: %v", err)
-		} else {
-			log.Printf("  Deleted from Pinecone candidate namespace")
-		}
-
-		// Delete from Pinecone (default namespace)
-		if err := pcClient.Delete(ctx, "", []string{docID}); err != nil {
-			log.Printf("  WARNING: pinecone delete default namespace: %v", err)
-		} else {
-			log.Printf("  Deleted from Pinecone default namespace")
-		}
-
-		// Delete from Postgres
-		conn, err := pgClient.Pool.Acquire(ctx)
-		if err != nil {
-			log.Printf("  WARNING: acquire connection: %v", err)
-			continue
-		}
-
-		batch := &pgx.Batch{}
-		batch.Queue("DELETE FROM chunks WHERE document_id = $1", docID)
-		batch.Queue("DELETE FROM document_fingerprints WHERE document_id = $1", docID)
-		batch.Queue("DELETE FROM documents WHERE id = $1", docID)
-
-		results := conn.SendBatch(ctx, batch)
-		for i := 0; i < 3; i++ {
-			if _, err := results.Exec(); err != nil {
-				log.Printf("  WARNING: postgres delete batch %d: %v", i, err)
-			}
-		}
-		_ = results.Close()
-		conn.Release()
-
-		log.Printf("  Deleted from Postgres")
-	}
-
-	log.Printf("Cleanup complete. Deleted %d test documents.", len(testDocIDs))
 	return nil
 }

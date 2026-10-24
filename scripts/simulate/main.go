@@ -1,3 +1,4 @@
+// Package main exercises document ingestion, filtering and deletion against a running service.
 package main
 
 import (
@@ -13,12 +14,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const baseURL = "http://localhost:8081"
 
 // --- response types ---
+
+type responseStatus struct{ StatusCode int }
 
 type healthResp struct {
 	Status   string `json:"status"`
@@ -75,14 +79,14 @@ type scenarioResult struct {
 }
 
 var (
-	sofiaID   string
-	techJobID string
-	passed    int
-	total     int
-	results   []scenarioResult
+	guideID  string
+	reportID string
+	passed   int
+	total    int
+	results  []scenarioResult
 )
 
-func doRequest(method, path string, body interface{}) (*http.Response, []byte, error) {
+func doRequest(method, path string, body interface{}) (*responseStatus, []byte, error) {
 	var reqBody io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -91,23 +95,24 @@ func doRequest(method, path string, body interface{}) (*http.Response, []byte, e
 		}
 		reqBody = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, baseURL+path, reqBody)
+	req, err := http.NewRequestWithContext(context.Background(), method, baseURL+path, reqBody)
 	if err != nil {
 		return nil, nil, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
+	req.Header.Set("X-Service-Token", os.Getenv("SERVICE_TOKEN"))
+	resp, err := (&http.Client{Timeout: 120 * time.Second}).Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return resp, nil, err
+		return &responseStatus{StatusCode: resp.StatusCode}, nil, err
 	}
-	return resp, respBody, nil
+	return &responseStatus{StatusCode: resp.StatusCode}, respBody, nil
 }
 
 func printScenario(num int, name, method, path string, reqBody interface{}, status int, respBody []byte, pass bool, reason string) {
@@ -157,27 +162,11 @@ func loadDatabaseURL() string {
 	return ""
 }
 
-func isValidUUID(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i, c := range s {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if c != '-' {
-				return false
-			}
-		} else {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-				return false
-			}
-		}
-	}
-	return true
-}
+func isValidUUID(s string) bool { _, err := uuid.Parse(s); return err == nil }
 
 func main() {
 	fmt.Println("═══════════════════════════════════════════════")
-	fmt.Println("  Django Call Pattern Simulation")
+	fmt.Println("  Document Service Simulation")
 	fmt.Println("═══════════════════════════════════════════════")
 
 	// ── SCENARIO 1 ──
@@ -232,15 +221,15 @@ func scenario1() {
 	printScenario(1, "Health check", "GET", "/health", nil, resp.StatusCode, body, ok, reason)
 }
 
-// ── SCENARIO 2: Ingest CV via JSON with explicit doc_type ──
+// ── SCENARIO 2: Ingest reference via JSON with explicit doc_type ──
 func scenario2() {
 	reqBody := map[string]interface{}{
-		"content":  "Sofia Mamani - Backend Engineer. 4 years. Skills: Python, Django, PostgreSQL, Docker, AWS S3, Redis, REST APIs, JWT. Built REST APIs for fintech at DataPay BO. CS UMSA Bolivia. English B2. Available immediately.",
-		"doc_type": "candidate",
+		"content":  "Reference Guide: Cedar Archive. Covers Python, gRPC, PostgreSQL, Docker, AWS S3, Redis, REST APIs and JWT. Describes four years of archival system operation and document preservation.",
+		"doc_type": "reference",
 	}
 	resp, body, err := doRequest("POST", "/ingest", reqBody)
 	if err != nil {
-		printScenario(2, "Ingest CV with doc_type=candidate", "POST", "/ingest", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
+		printScenario(2, "Ingest reference with doc_type=reference", "POST", "/ingest", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
 		return
 	}
 	var ir ingestResp
@@ -251,19 +240,19 @@ func scenario2() {
 	if !ok {
 		reason = fmt.Sprintf("status=%d doc_id=%q valid_uuid=%v", resp.StatusCode, ir.DocumentID, isValidUUID(ir.DocumentID))
 	}
-	sofiaID = ir.DocumentID
-	printScenario(2, "Ingest CV with doc_type=candidate", "POST", "/ingest", reqBody, resp.StatusCode, body, ok, reason)
+	guideID = ir.DocumentID
+	printScenario(2, "Ingest reference with doc_type=reference", "POST", "/ingest", reqBody, resp.StatusCode, body, ok, reason)
 }
 
-// ── SCENARIO 3: Ingest job via JSON with explicit doc_type ──
+// ── SCENARIO 3: Ingest report via JSON with explicit doc_type ──
 func scenario3() {
 	reqBody := map[string]interface{}{
-		"content":  "Job Opening: Backend Developer. Company: TechBolivia. Salary: $2000-3000 USD/month. Required: Python 3+ years, Django, PostgreSQL, Docker, AWS. Nice to have: Redis, Celery, REST APIs. Level: Mid. English: B1 minimum. Start: flexible.",
-		"doc_type": "job",
+		"content":  "Incident Report: Cedar Archive. Describes a three-hour network outage. Systems: Python, gRPC, PostgreSQL, Docker, AWS. Follow-up: Redis caching, REST API health checks and recovery procedures.",
+		"doc_type": "report",
 	}
 	resp, body, err := doRequest("POST", "/ingest", reqBody)
 	if err != nil {
-		printScenario(3, "Ingest job with doc_type=job", "POST", "/ingest", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
+		printScenario(3, "Ingest report with doc_type=report", "POST", "/ingest", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
 		return
 	}
 	var ir ingestResp
@@ -274,8 +263,8 @@ func scenario3() {
 	if !ok {
 		reason = fmt.Sprintf("status=%d doc_id=%q valid_uuid=%v", resp.StatusCode, ir.DocumentID, isValidUUID(ir.DocumentID))
 	}
-	techJobID = ir.DocumentID
-	printScenario(3, "Ingest job with doc_type=job", "POST", "/ingest", reqBody, resp.StatusCode, body, ok, reason)
+	reportID = ir.DocumentID
+	printScenario(3, "Ingest report with doc_type=report", "POST", "/ingest", reqBody, resp.StatusCode, body, ok, reason)
 }
 
 // Verify Postgres after ingest
@@ -302,8 +291,8 @@ func verifyPostgres() {
 		id      string
 		expType string
 	}{
-		{sofiaID, "candidate"},
-		{techJobID, "job"},
+		{guideID, "reference"},
+		{reportID, "report"},
 	} {
 		var status, docType string
 		err := pool.QueryRow(ctx,
@@ -347,8 +336,8 @@ func verifyPostgres() {
 // ── SCENARIO 4: Deduplication check ──
 func scenario4() {
 	reqBody := map[string]interface{}{
-		"content":  "Sofia Mamani - Backend Engineer. 4 years. Skills: Python, Django, PostgreSQL, Docker, AWS S3, Redis, REST APIs, JWT. Built REST APIs for fintech at DataPay BO. CS UMSA Bolivia. English B2. Available immediately.",
-		"doc_type": "candidate",
+		"content":  "Reference Guide: Cedar Archive. Covers Python, gRPC, PostgreSQL, Docker, AWS S3, Redis, REST APIs and JWT. Describes four years of archival system operation and document preservation.",
+		"doc_type": "reference",
 	}
 	resp, body, err := doRequest("POST", "/ingest", reqBody)
 	if err != nil {
@@ -359,24 +348,24 @@ func scenario4() {
 	_ = json.Unmarshal(body, &ir)
 
 	ok := (resp.StatusCode == 200 || resp.StatusCode == 202) &&
-		(ir.Status == "already_ingested" || ir.DocumentID == sofiaID)
+		(ir.Status == "already_ingested" || ir.DocumentID == guideID)
 	reason := ""
 	if !ok {
-		reason = fmt.Sprintf("status=%d resp_status=%q doc_id=%q sofia_id=%q", resp.StatusCode, ir.Status, ir.DocumentID, sofiaID)
+		reason = fmt.Sprintf("status=%d resp_status=%q doc_id=%q guide_id=%q", resp.StatusCode, ir.Status, ir.DocumentID, guideID)
 	}
 	printScenario(4, "Deduplication check", "POST", "/ingest", reqBody, resp.StatusCode, body, ok, reason)
 }
 
-// ── SCENARIO 5: Query with filter_doc_type=candidate ──
+// ── SCENARIO 5: Query with filter_doc_type=reference ──
 func scenario5() {
 	reqBody := map[string]interface{}{
-		"query":           "Which candidates have Python and Django experience?",
+		"query":           "Which references describe Python and gRPC?",
 		"mode":            "auto",
-		"filter_doc_type": "candidate",
+		"filter_doc_type": "reference",
 	}
 	resp, body, err := doRequest("POST", "/query", reqBody)
 	if err != nil {
-		printScenario(5, "Query filter_doc_type=candidate", "POST", "/query", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
+		printScenario(5, "Query filter_doc_type=reference", "POST", "/query", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
 		return
 	}
 	var qr queryResp
@@ -386,15 +375,15 @@ func scenario5() {
 	reason := ""
 	if !ok {
 		reason = fmt.Sprintf("status=%d", resp.StatusCode)
-		printScenario(5, "Query filter_doc_type=candidate", "POST", "/query", reqBody, resp.StatusCode, body, false, reason)
+		printScenario(5, "Query filter_doc_type=reference", "POST", "/query", reqBody, resp.StatusCode, body, false, reason)
 		return
 	}
 
-	// All scored_chunks must have doc_type=candidate
+	// All scored_chunks must have doc_type=reference
 	for _, sc := range qr.ScoredChunks {
-		if sc.DocType != "candidate" {
+		if sc.DocType != "reference" {
 			ok = false
-			reason = fmt.Sprintf("scored_chunk has doc_type=%q, expected candidate", sc.DocType)
+			reason = fmt.Sprintf("scored_chunk has doc_type=%q, expected reference", sc.DocType)
 			break
 		}
 	}
@@ -406,19 +395,19 @@ func scenario5() {
 		ok = false
 		reason = "answer contains 'No relevant information'"
 	}
-	printScenario(5, "Query filter_doc_type=candidate", "POST", "/query", reqBody, resp.StatusCode, body, ok, reason)
+	printScenario(5, "Query filter_doc_type=reference", "POST", "/query", reqBody, resp.StatusCode, body, ok, reason)
 }
 
-// ── SCENARIO 6: Query with filter_doc_type=job ──
+// ── SCENARIO 6: Query with filter_doc_type=report ──
 func scenario6() {
 	reqBody := map[string]interface{}{
-		"query":           "What job openings require Python and offer remote work?",
+		"query":           "What reports describe Python services and network outages?",
 		"mode":            "auto",
-		"filter_doc_type": "job",
+		"filter_doc_type": "report",
 	}
 	resp, body, err := doRequest("POST", "/query", reqBody)
 	if err != nil {
-		printScenario(6, "Query filter_doc_type=job", "POST", "/query", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
+		printScenario(6, "Query filter_doc_type=report", "POST", "/query", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
 		return
 	}
 	var qr queryResp
@@ -428,14 +417,14 @@ func scenario6() {
 	reason := ""
 	if !ok {
 		reason = fmt.Sprintf("status=%d", resp.StatusCode)
-		printScenario(6, "Query filter_doc_type=job", "POST", "/query", reqBody, resp.StatusCode, body, false, reason)
+		printScenario(6, "Query filter_doc_type=report", "POST", "/query", reqBody, resp.StatusCode, body, false, reason)
 		return
 	}
 
 	for _, sc := range qr.ScoredChunks {
-		if sc.DocType != "job" {
+		if sc.DocType != "report" {
 			ok = false
-			reason = fmt.Sprintf("scored_chunk has doc_type=%q, expected job", sc.DocType)
+			reason = fmt.Sprintf("scored_chunk has doc_type=%q, expected report", sc.DocType)
 			break
 		}
 	}
@@ -443,20 +432,20 @@ func scenario6() {
 		ok = false
 		reason = fmt.Sprintf("chunks_used=%d, expected >= 1", qr.ChunksUsed)
 	}
-	printScenario(6, "Query filter_doc_type=job", "POST", "/query", reqBody, resp.StatusCode, body, ok, reason)
+	printScenario(6, "Query filter_doc_type=report", "POST", "/query", reqBody, resp.StatusCode, body, ok, reason)
 }
 
-// ── SCENARIO 7: Semantic ranking — job req as query ──
+// ── SCENARIO 7: Semantic ranking — report req as query ──
 func scenario7() {
 	reqBody := map[string]interface{}{
-		"query":           "Python 3+ years, Django, PostgreSQL, Docker, AWS. Experience with REST APIs and JWT authentication.",
+		"query":           "Python, gRPC, PostgreSQL, Docker and AWS. Operational procedures for REST services and JWT authentication.",
 		"mode":            "global",
-		"filter_doc_type": "candidate",
+		"filter_doc_type": "reference",
 		"max_chunks":      10,
 	}
 	resp, body, err := doRequest("POST", "/query", reqBody)
 	if err != nil {
-		printScenario(7, "Semantic ranking (candidate)", "POST", "/query", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
+		printScenario(7, "Semantic ranking (reference)", "POST", "/query", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
 		return
 	}
 	var qr queryResp
@@ -466,7 +455,7 @@ func scenario7() {
 	reason := ""
 	if !ok {
 		reason = fmt.Sprintf("status=%d", resp.StatusCode)
-		printScenario(7, "Semantic ranking (candidate)", "POST", "/query", reqBody, resp.StatusCode, body, false, reason)
+		printScenario(7, "Semantic ranking (reference)", "POST", "/query", reqBody, resp.StatusCode, body, false, reason)
 		return
 	}
 
@@ -489,7 +478,7 @@ func scenario7() {
 	// Check each chunk
 	if ok {
 		for _, sc := range qr.ScoredChunks {
-			if sc.DocID == "" || sc.DocType != "candidate" {
+			if sc.DocID == "" || sc.DocType != "reference" {
 				ok = false
 				reason = fmt.Sprintf("chunk missing doc_id or wrong doc_type=%q", sc.DocType)
 				break
@@ -498,22 +487,22 @@ func scenario7() {
 	}
 
 	if ok && len(qr.ScoredChunks) > 0 {
-		fmt.Printf("  Top candidate doc_id=%s score=%.4f\n", qr.ScoredChunks[0].DocID, qr.ScoredChunks[0].Score)
+		fmt.Printf("  Top reference doc_id=%s score=%.4f\n", qr.ScoredChunks[0].DocID, qr.ScoredChunks[0].Score)
 	}
-	printScenario(7, "Semantic ranking (candidate)", "POST", "/query", reqBody, resp.StatusCode, body, ok, reason)
+	printScenario(7, "Semantic ranking (reference)", "POST", "/query", reqBody, resp.StatusCode, body, ok, reason)
 }
 
-// ── SCENARIO 8: Vacancy recommendations — CV as query ──
+// ── SCENARIO 8: Related reports — document as query ──
 func scenario8() {
 	reqBody := map[string]interface{}{
-		"query":           "Backend engineer with Python, Django, PostgreSQL, Docker, AWS S3. Looking for mid-level positions.",
+		"query":           "An archive using Python, gRPC, PostgreSQL, Docker and AWS S3 experienced a network outage.",
 		"mode":            "global",
-		"filter_doc_type": "job",
+		"filter_doc_type": "report",
 		"max_chunks":      5,
 	}
 	resp, body, err := doRequest("POST", "/query", reqBody)
 	if err != nil {
-		printScenario(8, "Vacancy recommendations (job)", "POST", "/query", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
+		printScenario(8, "Related reports (report)", "POST", "/query", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
 		return
 	}
 	var qr queryResp
@@ -523,45 +512,45 @@ func scenario8() {
 	reason := ""
 	if !ok {
 		reason = fmt.Sprintf("status=%d", resp.StatusCode)
-		printScenario(8, "Vacancy recommendations (job)", "POST", "/query", reqBody, resp.StatusCode, body, false, reason)
+		printScenario(8, "Related reports (report)", "POST", "/query", reqBody, resp.StatusCode, body, false, reason)
 		return
 	}
 
-	// Check doc_type=job
+	// Check doc_type=report
 	for _, sc := range qr.ScoredChunks {
-		if sc.DocType != "job" {
+		if sc.DocType != "report" {
 			ok = false
-			reason = fmt.Sprintf("scored_chunk doc_type=%q, expected job", sc.DocType)
+			reason = fmt.Sprintf("scored_chunk doc_type=%q, expected report", sc.DocType)
 			break
 		}
 	}
 
-	// Check TECHJOB_ID appears
+	// Check REPORT_ID appears
 	if ok {
 		found := false
 		for _, sc := range qr.ScoredChunks {
-			if sc.DocID == techJobID {
+			if sc.DocID == reportID {
 				found = true
 				break
 			}
 		}
 		if !found {
 			ok = false
-			reason = fmt.Sprintf("techJobID=%s not found in scored_chunks", techJobID)
+			reason = fmt.Sprintf("reportID=%s not found in scored_chunks", reportID)
 		}
 	}
-	printScenario(8, "Vacancy recommendations (job)", "POST", "/query", reqBody, resp.StatusCode, body, ok, reason)
+	printScenario(8, "Related reports (report)", "POST", "/query", reqBody, resp.StatusCode, body, ok, reason)
 }
 
-// ── SCENARIO 9: Skill gap analysis ──
+// ── SCENARIO 9: Document comparison ──
 func scenario9() {
 	reqBody := map[string]interface{}{
-		"query": "What skills required in the TechBolivia Backend Developer job are not present in Sofia Mamani's profile? List the gaps.",
+		"query": "Compare the archive reference guide and the incident report. List the differences in system coverage.",
 		"mode":  "global",
 	}
 	resp, body, err := doRequest("POST", "/query", reqBody)
 	if err != nil {
-		printScenario(9, "Skill gap analysis", "POST", "/query", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
+		printScenario(9, "Document comparison", "POST", "/query", reqBody, 0, nil, false, fmt.Sprintf("request error: %v", err))
 		return
 	}
 	var qr queryResp
@@ -571,7 +560,7 @@ func scenario9() {
 	reason := ""
 	if !ok {
 		reason = fmt.Sprintf("status=%d", resp.StatusCode)
-		printScenario(9, "Skill gap analysis", "POST", "/query", reqBody, resp.StatusCode, body, false, reason)
+		printScenario(9, "Document comparison", "POST", "/query", reqBody, resp.StatusCode, body, false, reason)
 		return
 	}
 
@@ -583,19 +572,19 @@ func scenario9() {
 		ok = false
 		reason = "answer is empty"
 	}
-	printScenario(9, "Skill gap analysis", "POST", "/query", reqBody, resp.StatusCode, body, ok, reason)
+	printScenario(9, "Document comparison", "POST", "/query", reqBody, resp.StatusCode, body, ok, reason)
 }
 
 // ── SCENARIO 10: File retrieval URL ──
 func scenario10() {
-	path := fmt.Sprintf("/documents/%s/file", sofiaID)
+	path := fmt.Sprintf("/documents/%s/file", guideID)
 	resp, body, err := doRequest("GET", path, nil)
 	if err != nil {
 		printScenario(10, "File retrieval URL", "GET", path, nil, 0, nil, false, fmt.Sprintf("request error: %v", err))
 		return
 	}
 
-	// Sofia was ingested as JSON, so s3_key is null → expect 404
+	// Guide was ingested as JSON, so s3_key is null → expect 404
 	ok := resp.StatusCode == 404
 	reason := ""
 	if !ok {
@@ -614,7 +603,7 @@ func scenario10() {
 
 // ── SCENARIO 11: Delete document ──
 func scenario11() {
-	path := fmt.Sprintf("/documents/%s", sofiaID)
+	path := fmt.Sprintf("/documents/%s", guideID)
 	resp, body, err := doRequest("DELETE", path, nil)
 	if err != nil {
 		printScenario(11, "Delete document", "DELETE", path, nil, 0, nil, false, fmt.Sprintf("request error: %v", err))
@@ -632,7 +621,7 @@ func scenario11() {
 	}
 
 	// Verify: GET file should return 404
-	filePath := fmt.Sprintf("/documents/%s/file", sofiaID)
+	filePath := fmt.Sprintf("/documents/%s/file", guideID)
 	fileResp, _, fileErr := doRequest("GET", filePath, nil)
 	if fileErr != nil || fileResp.StatusCode != 404 {
 		status := 0
@@ -644,10 +633,10 @@ func scenario11() {
 		return
 	}
 
-	// Verify: query with filter_doc_type=candidate should NOT contain SOFIA_ID
+	// Verify: query with filter_doc_type=reference should NOT contain GUIDE_ID
 	queryBody := map[string]interface{}{
-		"query":           "Python Django experience",
-		"filter_doc_type": "candidate",
+		"query":           "Python gRPC architecture",
+		"filter_doc_type": "reference",
 	}
 	qResp, qBody, qErr := doRequest("POST", "/query", queryBody)
 	if qErr != nil {
@@ -657,9 +646,9 @@ func scenario11() {
 		var qr queryResp
 		_ = json.Unmarshal(qBody, &qr)
 		for _, sc := range qr.ScoredChunks {
-			if sc.DocID == sofiaID {
+			if sc.DocID == guideID {
 				ok = false
-				reason = fmt.Sprintf("sofia doc_id=%s still in scored_chunks after delete", sofiaID)
+				reason = fmt.Sprintf("guide doc_id=%s still in scored_chunks after delete", guideID)
 				break
 			}
 		}
@@ -692,13 +681,14 @@ func scenario13() {
 	_, _ = part.Write([]byte("col1,col2\nval1,val2"))
 	_ = writer.Close()
 
-	req, err := http.NewRequest("POST", baseURL+"/ingest", &buf)
+	req, err := http.NewRequestWithContext(context.Background(), "POST", baseURL+"/ingest", &buf)
 	if err != nil {
 		printScenario(13, "Invalid file type rejection", "POST", "/ingest", nil, 0, nil, false, fmt.Sprintf("request error: %v", err))
 		return
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	resp, err := http.DefaultClient.Do(req)
+	req.Header.Set("X-Service-Token", os.Getenv("SERVICE_TOKEN"))
+	resp, err := (&http.Client{Timeout: 120 * time.Second}).Do(req)
 	if err != nil {
 		printScenario(13, "Invalid file type rejection", "POST", "/ingest", nil, 0, nil, false, fmt.Sprintf("request error: %v", err))
 		return

@@ -1,5 +1,5 @@
 // Lightweight evaluation harness comparing query outputs against a fixed
-// representative set. Measures Spanish-language compliance, latency, and
+// representative set. Measures question-language compliance, latency, and
 // chunk usage. Designed to be run before and after changes to detect
 // regressions without committing anything.
 //
@@ -11,6 +11,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -22,7 +23,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 )
 
 const defaultBaseURL = "http://localhost:8081"
@@ -30,39 +30,28 @@ const defaultBaseURL = "http://localhost:8081"
 type query struct {
 	ID       string   // short identifier
 	Q        string   // query text
-	Lang     string   // user-facing language expected (always "es" in this project)
+	Lang     string   // expected answer language
 	Category string   // common | domain | ambiguous | edge | latency-stress | english-bias-risk
 	MustHave []string // substrings the answer should contain (loose grounding check)
 }
 
-// Representative evaluation set.
-//   - Mix of Spanish, English and mixed-language queries — the answer must
-//     always be Spanish because the consumer is a Bolivia-facing app.
-//   - "english-bias-risk" queries are phrased in English on purpose to
-//     stress-test language enforcement.
+// Representative questions cover lookups, comparisons and language matching.
 var evalSet = []query{
-	// common
-	{ID: "Q01", Q: "¿Qué candidatos tienen experiencia en Python?", Lang: "es", Category: "common"},
-	{ID: "Q02", Q: "¿Qué vacantes hay disponibles?", Lang: "es", Category: "common"},
-	{ID: "Q03", Q: "Resume las habilidades de los candidatos disponibles.", Lang: "es", Category: "common"},
-	// domain-specific
-	{ID: "Q04", Q: "¿Cuáles son los requisitos del puesto de Backend Developer en TechBolivia?", Lang: "es", Category: "domain", MustHave: []string{"Python"}},
-	{ID: "Q05", Q: "¿Qué candidatos cumplen con los requisitos del puesto Backend Developer de TechBolivia?", Lang: "es", Category: "domain"},
-	{ID: "Q06", Q: "Sofia Mamani: ¿qué tecnologías domina y cuántos años de experiencia tiene?", Lang: "es", Category: "domain"},
-	// ambiguous / under-specified
+	{ID: "Q01", Q: "¿Qué documentos describen Python?", Lang: "es", Category: "common"},
+	{ID: "Q02", Q: "¿Qué informes hay disponibles?", Lang: "es", Category: "common"},
+	{ID: "Q03", Q: "Resume los temas de los documentos disponibles.", Lang: "es", Category: "common"},
+	{ID: "Q04", Q: "¿Qué sistemas describe la guía del archivo?", Lang: "es", Category: "domain"},
+	{ID: "Q05", Q: "¿Qué informes coinciden con los temas de la guía del archivo?", Lang: "es", Category: "domain"},
+	{ID: "Q06", Q: "¿Cuántos años de operación describe la guía?", Lang: "es", Category: "domain"},
 	{ID: "Q07", Q: "Cuéntame más.", Lang: "es", Category: "ambiguous"},
 	{ID: "Q08", Q: "Mejores opciones", Lang: "es", Category: "ambiguous"},
-	// edge / nonsense
-	{ID: "Q09", Q: "asdfghjkl 1234", Lang: "es", Category: "edge"},
-	{ID: "Q10", Q: "?", Lang: "es", Category: "edge"},
-	// latency stress (long query + asks for compare/match → triggers multi-sub-query path)
-	{ID: "Q11", Q: "Comparar todos los candidatos con todas las vacantes disponibles, listando para cada vacante los tres candidatos más afines y explicando por qué.", Lang: "es", Category: "latency-stress"},
-	// english-bias risk: query is English but answer MUST be Spanish
-	{ID: "Q12", Q: "Which candidates have Python and Django experience? Please list them.", Lang: "es", Category: "english-bias-risk"},
-	{ID: "Q13", Q: "Tell me about Sofia Mamani's professional background.", Lang: "es", Category: "english-bias-risk"},
-	{ID: "Q14", Q: "List the job openings and their required years of experience.", Lang: "es", Category: "english-bias-risk"},
-	// mixed-language risk
-	{ID: "Q15", Q: "¿Qué candidate tiene más experience en backend?", Lang: "es", Category: "english-bias-risk"},
+	{ID: "Q09", Q: "asdfghjkl 1234", Lang: "en", Category: "edge"},
+	{ID: "Q10", Q: "?", Lang: "en", Category: "edge"},
+	{ID: "Q11", Q: "Comparar todos los documentos con todos los informes, listando para cada uno los tres temas más afines.", Lang: "es", Category: "latency-stress"},
+	{ID: "Q12", Q: "Which documents describe Python and Go? Please list them.", Lang: "en", Category: "language-matching"},
+	{ID: "Q13", Q: "Tell me about the archive reference guide.", Lang: "en", Category: "language-matching"},
+	{ID: "Q14", Q: "List all incident reports and their recovery procedures.", Lang: "en", Category: "language-matching"},
+	{ID: "Q15", Q: "¿Qué documento tiene más información sobre el archivo?", Lang: "es", Category: "language-matching"},
 }
 
 type queryResp struct {
@@ -87,26 +76,28 @@ type queryResp struct {
 }
 
 type result struct {
-	ID            string           `json:"id"`
-	Category      string           `json:"category"`
-	Query         string           `json:"query"`
-	HTTPStatus    int              `json:"http_status"`
-	LatencyMS     int64            `json:"latency_ms"`
-	ChunksUsed    int              `json:"chunks_used"`
-	ContextChunks int              `json:"context_chunks"`
-	ContextTokens int              `json:"context_tokens"`
-	EarlyExit     bool             `json:"early_exit"`
-	Mode          string           `json:"mode"`
-	InTokens      int              `json:"in_tokens"`
-	OutTokens     int              `json:"out_tokens"`
-	IsSpanish     bool             `json:"is_spanish"`
-	MixedLang     bool             `json:"mixed_lang"`
-	SpanishPct    float64          `json:"spanish_word_pct"`
-	Grounded      bool             `json:"grounded"`
-	Empty         bool             `json:"empty"`
-	Err           string           `json:"err,omitempty"`
-	StageTimings  map[string]int64 `json:"stage_timings_ms,omitempty"`
-	Answer        string           `json:"answer"`
+	ID               string           `json:"id"`
+	Category         string           `json:"category"`
+	Query            string           `json:"query"`
+	HTTPStatus       int              `json:"http_status"`
+	LatencyMS        int64            `json:"latency_ms"`
+	ChunksUsed       int              `json:"chunks_used"`
+	ContextChunks    int              `json:"context_chunks"`
+	ContextTokens    int              `json:"context_tokens"`
+	EarlyExit        bool             `json:"early_exit"`
+	Mode             string           `json:"mode"`
+	InTokens         int              `json:"in_tokens"`
+	OutTokens        int              `json:"out_tokens"`
+	LanguageOK       bool             `json:"language_ok"`
+	ExpectedLanguage string           `json:"expected_language"`
+	IsSpanish        bool             `json:"is_spanish"`
+	MixedLang        bool             `json:"mixed_lang"`
+	SpanishPct       float64          `json:"spanish_word_pct"`
+	Grounded         bool             `json:"grounded"`
+	Empty            bool             `json:"empty"`
+	Err              string           `json:"err,omitempty"`
+	StageTimings     map[string]int64 `json:"stage_timings_ms,omitempty"`
+	Answer           string           `json:"answer"`
 }
 
 type report struct {
@@ -115,6 +106,7 @@ type report struct {
 	BaseURL     string    `json:"base_url"`
 	N           int       `json:"n"`
 	OK          int       `json:"ok"`
+	LanguageOK  int       `json:"language_ok"`
 	SpanishOK   int       `json:"spanish_ok"`
 	Mixed       int       `json:"mixed"`
 	GroundedOK  int       `json:"grounded_ok"`
@@ -129,15 +121,14 @@ type report struct {
 var (
 	// spanishMarkers are diagnostic Spanish function words and connectives
 	// that essentially never appear in English prose.
-	spanishMarkers = regexp.MustCompile(`(?i)\b(en|de|para|con|los|las|una|que|por|sus|años|también|según|información|disponibles?|candidatos?|vacantes?|empresa|requisitos|habilidades|experiencia|relevante|contexto|según|sobre|hay|cuáles?|qué|quién|donde|cómo|cuándo)\b`)
+	spanishMarkers = regexp.MustCompile(`(?i)\b(en|de|para|con|los|las|una|que|por|sus|años|también|según|información|disponibles?|documentos?|informes?|empresa|requisitos|habilidades|experiencia|relevante|contexto|sobre|hay|cuáles?|qué|quién|donde|cómo|cuándo)\b`)
 
 	// englishMarkers are diagnostic ENGLISH FUNCTION WORDS — words that
-	// only occur in English sentences. Proper nouns like "Backend",
-	// "Developer", "Engineer", "Python", "Django" are deliberately
+	// only occur in English sentences. Technology names like "Python" and "Go" are deliberately
 	// excluded because they routinely appear inside Spanish prose
-	// (job titles, technology names) and would otherwise produce
+	// (technology names) and would otherwise produce
 	// false-positive English drift detections.
-	englishMarkers = regexp.MustCompile(`(?i)\b(the|with|and|for|years|skills|experience|provided|context|based|answer|please|note|following|available|listed|requires?|required|is|are|was|were|been|being|to|of|that|this|these|those|which|who|how|when|where|while|though|because|since|but|however|also|therefore|thus|then|here)\b`)
+	englishMarkers = regexp.MustCompile(`(?i)\b(the|with|and|for|years|systems|records|provided|context|based|answer|please|note|following|available|listed|requires?|required|is|are|was|were|been|being|to|of|that|this|these|those|which|who|how|when|where|while|though|because|since|but|however|also|therefore|thus|then|here)\b`)
 
 	stripAccents = regexp.MustCompile(`[áéíóúñÁÉÍÓÚÑ¿¡]`)
 )
@@ -146,7 +137,7 @@ var (
 // purely English, or mixed.  The heuristic is intentionally simple — it
 // counts diagnostic word occurrences. We accept a small number of English
 // proper nouns (technologies, names) since those are valid in Spanish prose.
-func classifyLanguage(answer string) (isSpanish bool, mixed bool, spanishPct float64) {
+func classifyLanguage(answer string) (isSpanish, mixed bool, spanishPct float64) {
 	answer = strings.TrimSpace(answer)
 	if answer == "" {
 		return false, false, 0
@@ -191,11 +182,12 @@ func classifyLanguage(answer string) (isSpanish bool, mixed bool, spanishPct flo
 
 func runQuery(baseURL, q string) (queryResp, int, time.Duration, error) {
 	payload, _ := json.Marshal(map[string]any{"query": q, "mode": "auto"})
-	req, err := http.NewRequest("POST", baseURL+"/query", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(context.Background(), "POST", baseURL+"/query", bytes.NewReader(payload))
 	if err != nil {
 		return queryResp{}, 0, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Service-Token", os.Getenv("SERVICE_TOKEN"))
 	c := &http.Client{Timeout: 120 * time.Second}
 	t0 := time.Now()
 	resp, err := c.Do(req)
@@ -203,7 +195,7 @@ func runQuery(baseURL, q string) (queryResp, int, time.Duration, error) {
 	if err != nil {
 		return queryResp{}, 0, dur, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	var qr queryResp
 	_ = json.Unmarshal(body, &qr)
@@ -312,6 +304,8 @@ func runEval(baseURL, tag string, set []query) report {
 		}
 		r.Empty = strings.TrimSpace(qr.Answer) == ""
 		isSp, mixed, pct := classifyLanguage(qr.Answer)
+		r.ExpectedLanguage = q.Lang
+		r.LanguageOK = languageMatches(q.Lang, qr.Answer)
 		r.IsSpanish = isSp
 		r.MixedLang = mixed
 		r.SpanishPct = pct
@@ -322,6 +316,9 @@ func runEval(baseURL, tag string, set []query) report {
 
 		if status == 200 && !r.Empty {
 			rep.OK++
+		}
+		if r.LanguageOK {
+			rep.LanguageOK++
 		}
 		if r.IsSpanish {
 			rep.SpanishOK++
@@ -352,15 +349,16 @@ func runEval(baseURL, tag string, set []query) report {
 }
 
 func writeReport(rep report, dir string) (string, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}
 	fn := filepath.Join(dir, fmt.Sprintf("eval-%s.json", rep.Tag))
+	//nolint:gosec // The output directory and report tag are supplied by the local operator.
 	f, err := os.Create(fn)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(rep); err != nil {
@@ -371,6 +369,7 @@ func writeReport(rep report, dir string) (string, error) {
 
 func loadReport(path string) (report, error) {
 	var r report
+	//nolint:gosec // Report paths are selected by the local operator.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return r, err
@@ -381,15 +380,15 @@ func loadReport(path string) (report, error) {
 
 func printRep(r report) {
 	fmt.Printf("\n══ %s ══════════════════════════════════════════════\n", r.Tag)
-	fmt.Printf(" N=%d  HTTP-OK=%d  Spanish=%d/%d  Mixed=%d  Grounded=%d\n",
-		r.N, r.OK, r.SpanishOK, r.N, r.Mixed, r.GroundedOK)
+	fmt.Printf(" N=%d  HTTP-OK=%d  Language=%d/%d  Mixed=%d  Grounded=%d\n",
+		r.N, r.OK, r.LanguageOK, r.N, r.Mixed, r.GroundedOK)
 	fmt.Printf(" Latency avg=%dms  p50=%dms  p95=%dms\n", r.AvgLatMS, r.P50LatMS, r.P95LatMS)
 	fmt.Printf(" Tokens in=%d out=%d\n", r.TotalInTok, r.TotalOutTok)
 	for _, x := range r.Results {
 		marker := "OK "
 		switch {
-		case !x.IsSpanish:
-			marker = "ES!"
+		case !x.LanguageOK:
+			marker = "LANG!"
 		case x.MixedLang:
 			marker = "MIX"
 		}
@@ -435,17 +434,6 @@ func compare(a, b report) {
 	}
 }
 
-// runeFilter strips non-letter glyphs for nicer logging when needed.
-func runeFilter(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsSpace(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
 func main() {
 	tag := flag.String("tag", "run", "report tag (e.g. baseline, after)")
 	baseURL := flag.String("base", defaultBaseURL, "service base URL")
@@ -465,9 +453,14 @@ func main() {
 				continue
 			}
 			r.SpanishOK = 0
+			r.LanguageOK = 0
 			r.Mixed = 0
 			for i, x := range r.Results {
 				isSp, mx, pct := classifyLanguage(x.Answer)
+				r.Results[i].LanguageOK = languageMatches(x.ExpectedLanguage, x.Answer)
+				if r.Results[i].LanguageOK {
+					r.LanguageOK++
+				}
 				r.Results[i].IsSpanish = isSp
 				r.Results[i].MixedLang = mx
 				r.Results[i].SpanishPct = pct
@@ -515,5 +508,18 @@ func main() {
 	}
 	printRep(rep)
 	fmt.Printf("\nReport written to %s\n", fn)
-	_ = runeFilter // silence unused if no consumer
+}
+
+func languageMatches(language, answer string) bool {
+	if strings.TrimSpace(answer) == "" {
+		return false
+	}
+	spanish, mixed, _ := classifyLanguage(answer)
+	if language == "es" {
+		return spanish && !mixed
+	}
+	if language == "en" {
+		return !spanish && !mixed && englishMarkers.MatchString(answer)
+	}
+	return false
 }
