@@ -1,170 +1,149 @@
 # Development
 
-## Prerequisites
+For contribution guidelines, environment setup, Conventional Commits formatting, and pull request procedures, refer to CONTRIBUTING.md. For vulnerability reporting procedures, refer to SECURITY.md.
 
-- Go 1.26+
-- Docker 27+ (for containerized builds/tests)
-- golangci-lint (install: `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest`)
-- A `.env` file with valid credentials (see [configuration.md](configuration.md))
+---
 
-## Local Setup
+## Repository Layout
 
-1. Clone the repository.
-2. Copy `.env.example` to `.env` and fill in all required credentials.
-3. Build and run directly:
-   ```bash
-   go build -o server ./cmd/server
-   ./server
-   ```
-4. Or via Docker Compose:
-   ```bash
-   docker compose up --build -d
-   ```
-
-The server starts on the port specified by `SERVER_PORT` (default `8081`).
-
-## Running Tests
-
-### All Tests with Race Detection
-
-```bash
-CGO_ENABLED=1 go test ./... -count=1 -race
+```text
+cmd/
+  server/               Application entry point, dependency wiring, and graceful shutdown
+internal/
+  api/                  HTTP router, route registration, and middleware chaining
+    handler/            HTTP handlers (document, file, health, ingest, json, query)
+    middleware/         Structured JSON logging, panic recovery, and service token authentication
+  chunker/              Sliding-window text chunker and SHA-256 content fingerprinting
+  cleanup/              Multi-store document deletion coordinator (Pinecone, S3, PostgreSQL)
+  config/               Environment variable loading, default fallbacks, and validation boundaries
+  domain/               Domain types, shared interfaces, and default document label definitions
+  embedder/             Bedrock Titan Embed V2 provider and offline fake embedder
+  extractor/            Text extraction adapters for PDF, DOCX, DOC, and plain text
+  llm/                  Bedrock Converse client, model routing matrix, and offline fake converser
+  pipeline/             Ingestion stages (chunk, embed, persist) and query stages (decompose, route, retrieve, synthesize)
+  retriever/            Vector retrieval coordinator, LOCAL/GLOBAL mode decision tree, and fallback logic
+  store/
+    memory/             In-memory thread-safe vector store used in offline fake mode
+    pinecone/           Pinecone vector store driver and index connection pooling
+    postgres/           PostgreSQL client, connection pool, and embedded SQL migrations (001–005)
+    s3/                 AWS S3 client for raw object storage and presigned URL generation
+  worker/               In-memory buffered channel queue and single-worker ingestion consumer
+scripts/
+  cleanup/              CLI utility to delete specified document UUIDs from all stores
+  langeval/             Evaluation harness for response language compliance, latency, and chunk counts
+  simulate/             End-to-end API simulation runner testing full document lifecycles
+  validate/             Retrieval validation script verifying query modes and scoring
+test/
+  integration/          Integration tests using Testcontainers for isolated PostgreSQL testing
+  smoke/                Live smoke test suite targeting running services (opt-in via RUN_SMOKE=1)
+  unit/                 Unit tests covering chunking, extraction, fake mode, retriever, and router logic
 ```
 
-### Unit Tests
+---
 
-```bash
+## Test Suites
+
+The test suite is structured into three tiers:
+
+Host targets mirror the full validation path:
+
+```sh
+make vet
+make lint
+make test
+make ci
+```
+
+`make ci` runs vet, lint and the full race suite in order, then builds the runtime image. `docker build --target test .` runs the short suite without requiring a nested Docker daemon.
+
+### 1. Unit Tests
+
+Unit tests execute without external dependencies, testing pure domain functions, data parsing, and mock-backed pipeline logic.
+
+```sh
 go test ./test/unit/... -count=1 -v
 ```
 
-Covers:
-- **Retriever logic** (`retriever_test.go`): `DetermineMode`, `DetermineModeWithQuery`, `Retrieve` with mock VectorStore and Embedder. Verifies fallback from GLOBAL with < 3 chunks.
-- **LLM routing** (`router_test.go`): Verifies model selection based on task type, context tokens, and failure reasons. Tests context limit rerouting, synthesis-always-maverick, and structured output fallback.
+Scope of unit tests:
+- **Chunker (`chunker_test.go`)**: Validates word window boundaries, token approximation formulas, HTML sanitization, and SHA-256 fingerprint generation.
+- **Extractor (`extractor_test.go`)**: Validates text extraction from synthetic PDF, DOCX, DOC, and plain text buffers, including XML expansion limits and context cancellations.
+- **Fake Mode (`fakemode_test.go`)**: Verifies deterministic in-memory vector storage, mock embeddings, and fake converser outputs.
+- **Named Entities (`named_entity_test.go`)**: Tests proper noun phrase extraction, stop-word filtering, and Unicode capitalization handling.
+- **Retriever (`retriever_test.go`)**: Verifies LOCAL vs. GLOBAL mode determination, similarity score thresholding, and fallback search triggering when fewer than 3 chunks are returned.
+- **Router (`router_test.go`)**: Validates model selection decisions across task types, context token thresholds, and synthesis modes.
 
-### Integration Tests
+### 2. Integration Tests
 
-```bash
-go test ./test/integration/... -count=1 -v
+Integration tests verify database persistence, transactional rollbacks, schema migrations, and pipeline execution. Tests use Testcontainers to spin up isolated PostgreSQL containers automatically during execution.
+
+```sh
+go test -race -count=1 ./test/integration/...
 ```
 
-Covers:
-- **Ingest handler** (`ingest_test.go`): JSON ingest, multipart file ingest (DOCX), deduplication via fingerprint, file size limit enforcement. Uses mock ChunkStore, VectorStore, and Embedder. Tests that the worker processes tasks and the pipeline runs end-to-end in-process.
+Docker must be running locally to permit Testcontainers to manage the ephemeral PostgreSQL database instance. The two database-backed tests skip under `go test -short` with an explicit daemon requirement message; CI runs the full suite without `-short`.
 
-### Smoke Tests
+### 3. Smoke Tests
 
-```bash
+Smoke tests run against live, deployed instances and external cloud services (AWS Bedrock, Pinecone, PostgreSQL, and S3). Smoke tests are excluded by default to avoid unexpected cloud consumption or accidental mutation of configured datasets. Accepted documents register bounded deferred deletion that waits for asynchronous ingestion to persist their metadata.
+
+To opt in to smoke testing against a configured service:
+
+```sh
 RUN_SMOKE=1 go test ./test/smoke/... -count=1 -v -timeout 120s
 ```
 
-Requires a running server (via Docker Compose or local). Covers:
-- Health check endpoint.
-- DOCX file ingest (creates a real document, waits for completion, verifies in Postgres).
-- Unsupported file type rejection (.txt).
-- Large file upload rejection.
-- Automatic cleanup: smoke tests delete any documents they create via `cleanup.CleanupDocument`.
+---
 
-## Linting
+## Operational Scripts
 
-```bash
-golangci-lint run --config=.golangci.yml
+The `scripts/` directory contains standalone administrative and evaluation tools:
+
+### Document Cleanup (`scripts/cleanup`)
+
+Accepts one or more document UUIDs as command-line arguments and removes their records from Pinecone, S3, and PostgreSQL using one shared set of clients:
+
+```sh
+make cleanup IDS="<document-uuid-1> <document-uuid-2>"
 ```
 
-The `.golangci.yml` configuration enables linters including `govet`, `staticcheck`, `errcheck`, `gosimple`, `ineffassign`, `unused`, `gocritic`, `misspell`, `gofmt`, and `goimports`. Test files in `test/` and `scripts/` are included in the lint scope.
+### Language Evaluation (`scripts/langeval`)
 
-## Build Gate
+Measures whether generated answers match the language of the input question (e.g., English or Spanish) across a fixed evaluation query set, recording token usage and latency:
 
-Run the full quality gate before any merge:
-
-```bash
-go mod tidy
-go build ./...
-go vet ./...
-golangci-lint run --config=.golangci.yml
-CGO_ENABLED=1 go test ./... -count=1 -race
+```sh
+go run ./scripts/langeval
+go run ./scripts/langeval -tag baseline
+go run ./scripts/langeval -tag after
+go run ./scripts/langeval -compare baseline,after
 ```
 
-All four commands must exit 0.
+### End-to-End Simulation (`scripts/simulate`)
 
-## Scripts (scripts/ directory)
+Simulates a sequential series of client interactions against a running instance on port 8081, verifying health checks, JSON ingestion, duplicate detection, vector query modes, and document deletion:
 
-Scripts are standalone Go programs in `scripts/`. They share the same `go.mod` but are excluded from the Docker image via `.dockerignore`. Each script loads `.env` for database and service credentials.
-
-### scripts/cleanup
-
-Deletes all test data from Pinecone and Postgres. Iterates over documents in Postgres, calls `cleanup.CleanupDocument` for each, which:
-1. Deletes vectors from Pinecone (candidate namespace, default namespace, document namespace).
-2. Deletes from Postgres (chunks, fingerprints, documents) via batch query.
-
-```bash
-go run ./scripts/cleanup/main.go
-```
-
-### scripts/validate
-
-Runs business validation queries against a live server. Executes predefined queries and checks response structure.
-
-```bash
-go run ./scripts/validate/main.go
-```
-
-### scripts/simulate
-
-Runs all 14 Django call pattern simulation scenarios sequentially. Stops on the first failure and reports a summary. Scenarios include:
-
-| # | Scenario | Verifies |
-|---|---|---|
-| 1 | Health check | `GET /health` returns 200, all services `"ok"` |
-| 2 | Ingest CV (JSON, doc_type=candidate) | 202/200, valid UUID returned |
-| 3 | Ingest job (JSON, doc_type=job) | 202/200, valid UUID returned |
-| -- | Postgres verification | Documents exist with correct `status` and `doc_type` |
-| 4 | Deduplication check | Same content returns `"already_ingested"` |
-| 5 | Query filter_doc_type=candidate | Only candidate chunks returned |
-| 6 | Query filter_doc_type=job | Only job chunks returned |
-| 7 | Semantic ranking (candidate) | Chunks sorted by score descending, all doc_type=candidate |
-| 8 | Vacancy recommendations (job) | Job document appears in scored_chunks |
-| 9 | Skill gap analysis | chunks_used >= 2, non-empty answer |
-| 10 | File retrieval URL | 404 for JSON-ingested doc (no S3 file) |
-| 11 | Delete document | 200, verified gone from file endpoint and query results |
-| 12 | Delete non-existent document | 404 |
-| 13 | Invalid file type rejection | 415 for .csv upload |
-| 14 | Health reflects real state | 200, all services still `"ok"` |
-
-```bash
+```sh
 go run ./scripts/simulate/main.go
 ```
 
-## Adding a New Document Format
+### Retrieval Validation (`scripts/validate`)
 
-1. Create `internal/extractor/<format>.go` with a struct implementing the `Extractor` interface:
-   ```go
-   type Extractor interface {
-       Extract(ctx context.Context, r io.Reader) (string, error)
-       Type() FileType
-   }
-   ```
-2. Add a `FileType` constant in `internal/extractor/extractor.go` (e.g. `FileTypeXLSX FileType = "xlsx"`).
-3. Add the extension to the `switch` in `DetectFileType`.
-4. Add the extractor to the `switch` in `New`.
-5. Add the MIME type to `ContentTypeFromFileType`.
-6. Add unit tests.
+Dispatches predefined queries to a running instance to verify that routing logic correctly assigns LOCAL or GLOBAL retrieval modes and returns non-empty result sets:
 
-## Adding a New Endpoint
+```sh
+go run ./scripts/validate/main.go
+```
 
-1. Create a handler file in `internal/api/handler/` (e.g. `stats.go`).
-2. Define request/response structs with JSON tags.
-3. Write the handler function following the pattern: `func StatsHandler(deps...) http.HandlerFunc`.
-4. Register the route in `internal/api/router.go` -> `NewRouter` function.
-5. If the handler needs a new store method, add it to the appropriate interface in `internal/domain/interfaces.go` and implement it in the store package.
-6. Update `RouterDeps` struct if new dependencies are needed.
-7. Wire the dependency in `cmd/server/main.go`.
+---
 
-## Package Dependency Rules
+## Offline Fake Mode Internals
 
-- **`internal/domain`** has zero internal imports. All other packages may import it.
-- **Store packages** (`pinecone`, `postgres`, `s3`) import only `domain` and `config`.
-- **`internal/pipeline`** imports `domain`, `chunker`, `retriever`, `llm`, `config`, `postgres` (for named entity cache only).
-- **`internal/retriever`** imports only `domain`.
-- **`internal/api/handler`** imports `domain`, `worker`, store packages, `pipeline`, `retriever`, `llm`, `config`.
-- **`internal/worker`** imports `domain`, `pipeline`, `chunker`.
-- **`cmd/server`** imports everything to wire dependencies.
-- **`internal/cleanup`** is a standalone utility; imports `config`, `pinecone`, `postgres`.
+Setting `GO_RAG_FAKE_MODE=true` allows the entire microservice and its HTTP endpoints to run locally without connecting to AWS Bedrock, Pinecone, or S3.
+
+### Implementation Architecture
+
+When `FakeMode` is active in `cmd/server/main.go`:
+1. **Vector Store**: Instantiates `internal/store/memory.FakeVectorStore`, which stores vector embeddings in a thread-safe Go map (`sync.RWMutex`). Vector distance calculations use cosine similarity computed in memory.
+2. **Embedding Provider**: Instantiates `internal/embedder.FakeEmbedder`, generating deterministic 1024-dimensional float arrays based on hashing input texts.
+3. **LLM Converser**: Instantiates `internal/llm.FakeConverser`, returning structured responses without invoking external APIs.
+4. **Object Storage**: S3 client initialization is skipped. Multipart file ingestion extracts text directly in memory and continues through chunking and indexing without storing the raw binary.
+5. **Relational Storage**: PostgreSQL is still utilized via `DATABASE_URL` for real schema migrations (001–005), metadata storage, and duplicate fingerprint tracking.
