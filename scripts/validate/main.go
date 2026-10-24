@@ -1,14 +1,16 @@
-// Package main validates the 14 TalentBridge queries against the live server.
+// Package main validates document retrieval queries against the live server.
 package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 type queryTest struct {
@@ -25,27 +27,19 @@ type queryResponse struct {
 
 func main() {
 	queries := []queryTest{
-		{"R1", "What are Laura's main technical skills?", "LOCAL"},
-		{"R2", "Describe Andres Castillo's experience with microservices", "LOCAL"},
-		{"R3", "What cloud platforms does Camila Rojas have experience with?", "LOCAL"},
-		{"R4", "Tell me about Marco Villanueva's leadership experience", "LOCAL"},
-		{"R5", "What is the tech stack for the Senior Backend Engineer role?", "GLOBAL"},
-		{"R6", "What are the key responsibilities for the DataFlow Senior Data Engineer position?", "LOCAL"},
-		{"R7", "How many years of experience does Laura Benitez have?", "LOCAL"},
-		{"C1", "Which candidates have AWS Bedrock experience?", "GLOBAL"},
-		{"C2", "Find candidates with Python and Spark skills", "GLOBAL"},
-		{"C3", "Who has experience with microservices architecture?", "GLOBAL"},
-		{"C4", "List all candidates with cloud computing experience", "GLOBAL"},
-		{"E1", "Match candidates to the Senior Backend Engineer role", "GLOBAL"},
-		{"E2", "Which candidates are suitable for the DataFlow data engineer position?", "GLOBAL"},
-		{"E3", "Find the best candidate for a role requiring Go and gRPC", "GLOBAL"},
+		{"R1", "What systems does the archive guide describe?", "LOCAL"},
+		{"R2", "Describe the network incident report", "LOCAL"},
+		{"C1", "Which documents describe AWS Bedrock?", "GLOBAL"},
+		{"C2", "Find documents describing Python and Spark", "GLOBAL"},
+		{"C3", "Compare all reports about system recovery", "GLOBAL"},
+		{"E1", "Compare reference guides with incident reports", "GLOBAL"},
 	}
 
 	baseURL := "http://localhost:8081"
 	passed := 0
 	failed := 0
 
-	fmt.Println("=== TalentBridge Query Validation ===")
+	fmt.Println("=== Document Retrieval Query Validation ===")
 	fmt.Printf("Testing %d queries against %s\n\n", len(queries), baseURL)
 
 	for _, q := range queries {
@@ -57,7 +51,15 @@ func main() {
 		}
 		bodyBytes, _ := json.Marshal(reqBody)
 
-		resp, err := http.Post(baseURL+"/query", "application/json", bytes.NewReader(bodyBytes))
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, baseURL+"/query", bytes.NewReader(bodyBytes))
+		if err != nil {
+			fmt.Printf("request: %v\n", err)
+			failed++
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Service-Token", os.Getenv("SERVICE_TOKEN"))
+		resp, err := (&http.Client{Timeout: 120 * time.Second}).Do(req)
 		if err != nil {
 			fmt.Printf("  ERROR: %v\n", err)
 			failed++
