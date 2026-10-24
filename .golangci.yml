@@ -1,34 +1,39 @@
+version: "2"
 run:
   timeout: 5m
-  go: "1.26"
-
+  go: "1.27.3"
 linters:
+  default: none
   enable:
     - errcheck
     - govet
     - staticcheck
     - unused
     - ineffassign
-    - gosimple
     - gocritic
     - misspell
+    - bodyclose
+    - errorlint
+    - gosec
+    - revive
+    - noctx
+    - contextcheck
+    - nilerr
+    - unconvert
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+    misspell:
+      locale: US
+  exclusions:
+    presets: []
+formatters:
+  enable:
     - gofmt
     - goimports
-
-linters-settings:
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-  misspell:
-    locale: US
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck

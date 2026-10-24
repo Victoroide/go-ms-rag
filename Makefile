@@ -4,21 +4,23 @@
 build:
 	docker build --target builder -t go-ms-rag:build .
 
+# Run static analysis on the host.
 vet:
-	docker build --target test -t go-ms-rag:test . \
-		--build-arg RUN_VET=1
+	go vet ./...
 
 lint:
-	docker build --target lint -t go-ms-rag:lint .
+	golangci-lint run ./...
 
+# Full tests need a running Docker daemon for isolated database containers.
 test:
-	docker build --target test -t go-ms-rag:test .
+	go test -race -count=1 ./...
 
-# Run all quality gates in order (CI equivalent)
+# Run host quality gates before building the runtime image.
 ci:
-	docker build --target test  --no-cache -t go-ms-rag:test .
-	docker build --target lint  --no-cache -t go-ms-rag:lint .
-	docker build --target builder             -t go-ms-rag:prod .
+	$(MAKE) vet
+	$(MAKE) lint
+	$(MAKE) test
+	docker build --target runtime -t go-ms-rag:prod .
 
 # Start the full stack
 up:
@@ -30,8 +32,9 @@ down:
 logs:
 	docker-compose logs -f app
 
+# Delete explicit document UUIDs: make cleanup IDS="<uuid> <uuid>".
 cleanup:
-	go run ./scripts/cleanup/main.go
+	go run ./scripts/cleanup $(IDS)
 
 validate:
 	go run ./scripts/validate/main.go
