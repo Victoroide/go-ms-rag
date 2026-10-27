@@ -1,4 +1,4 @@
-module github.com/Victoroide/go-ms-rag
+module github.com/Victoroide/quarry-rag
 
 go 1.27.3
 

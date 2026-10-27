@@ -5,7 +5,7 @@ package llm
 import (
 	"log"
 
-	"github.com/Victoroide/go-ms-rag/internal/config"
+	"github.com/Victoroide/quarry-rag/internal/config"
 )
 
 // TaskType classifies the purpose of a Bedrock call for routing decisions.

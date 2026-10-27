@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Victoroide/go-ms-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/domain"
 )
 
 // StageID identifies a pipeline stage.

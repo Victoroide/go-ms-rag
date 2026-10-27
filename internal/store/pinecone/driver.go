@@ -3,7 +3,7 @@ package pinecone
 import (
 	"context"
 
-	"github.com/Victoroide/go-ms-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/domain"
 )
 
 // Driver implements the domain.VectorStore interface using Pinecone.

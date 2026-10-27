@@ -61,7 +61,7 @@ jobs:
       - name: Build packages
         run: go build ./...
       - name: Build runtime image
-        run: docker build --target runtime --tag go-ms-rag:ci .
+        run: docker build --target runtime --tag quarry-rag:ci .
 
   govulncheck:
     name: Check reachable vulnerabilities

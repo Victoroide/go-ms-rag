@@ -6,11 +6,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Victoroide/go-ms-rag/internal/api/middleware"
-	"github.com/Victoroide/go-ms-rag/internal/domain"
-	"github.com/Victoroide/go-ms-rag/internal/embedder"
-	"github.com/Victoroide/go-ms-rag/internal/llm"
-	"github.com/Victoroide/go-ms-rag/internal/store/memory"
+	"github.com/Victoroide/quarry-rag/internal/api/middleware"
+	"github.com/Victoroide/quarry-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/embedder"
+	"github.com/Victoroide/quarry-rag/internal/llm"
+	"github.com/Victoroide/quarry-rag/internal/store/memory"
 )
 
 // FakeEmbedder must be deterministic, correctly dimensioned, and distinguish

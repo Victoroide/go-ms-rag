@@ -6,7 +6,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/Victoroide/go-ms-rag/internal/config"
+	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"

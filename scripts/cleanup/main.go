@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/Victoroide/go-ms-rag/internal/cleanup"
-	"github.com/Victoroide/go-ms-rag/internal/config"
+	"github.com/Victoroide/quarry-rag/internal/cleanup"
+	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/google/uuid"
 )
 

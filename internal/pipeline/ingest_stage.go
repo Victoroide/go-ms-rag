@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Victoroide/go-ms-rag/internal/chunker"
-	"github.com/Victoroide/go-ms-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/chunker"
+	"github.com/Victoroide/quarry-rag/internal/domain"
 )
 
 // ChunkStage splits a raw document into chunks using the sliding window chunker.

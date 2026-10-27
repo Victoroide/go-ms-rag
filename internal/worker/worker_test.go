@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Victoroide/go-ms-rag/internal/domain"
-	"github.com/Victoroide/go-ms-rag/internal/pipeline"
+	"github.com/Victoroide/quarry-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/pipeline"
 )
 
 func TestShutdownIsIdempotentAndRejectsEnqueue(t *testing.T) {

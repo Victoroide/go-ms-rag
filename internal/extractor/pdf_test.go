@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Victoroide/go-ms-rag/internal/api/handler"
-	"github.com/Victoroide/go-ms-rag/internal/extractor"
+	"github.com/Victoroide/quarry-rag/internal/api/handler"
+	"github.com/Victoroide/quarry-rag/internal/extractor"
 )
 
 func generatedPDF(t *testing.T, stream string, compressed bool, unicodeMap ...string) []byte {

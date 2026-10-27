@@ -17,18 +17,18 @@ For host verification, `make vet`, `make lint` and `make test` run directly with
 To compile the runtime image:
 
 ```sh
-docker build --target runtime -t go-ms-rag:local .
+docker build --target runtime -t quarry-rag:local .
 ```
 
 To run the container with an environment file:
 
 ```sh
 docker run -d \
-  --name go-ms-rag \
+  --name quarry-rag \
   --user 10001:10001 \
   --env-file .env \
   -p 8081:8081 \
-  go-ms-rag:local
+  quarry-rag:local
 ```
 
 ---

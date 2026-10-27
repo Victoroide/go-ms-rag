@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Victoroide/go-ms-rag/internal/chunker"
-	"github.com/Victoroide/go-ms-rag/internal/domain"
-	"github.com/Victoroide/go-ms-rag/internal/pipeline"
+	"github.com/Victoroide/quarry-rag/internal/chunker"
+	"github.com/Victoroide/quarry-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/pipeline"
 )
 
 // IngestTask represents a document to be ingested asynchronously.

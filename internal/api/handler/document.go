@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/Victoroide/go-ms-rag/internal/cleanup"
+	"github.com/Victoroide/quarry-rag/internal/cleanup"
 
-	"github.com/Victoroide/go-ms-rag/internal/domain"
-	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
+	"github.com/Victoroide/quarry-rag/internal/domain"
+	s3store "github.com/Victoroide/quarry-rag/internal/store/s3"
 	"github.com/google/uuid"
 )
 
