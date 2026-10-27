@@ -3,7 +3,7 @@ package memory
 import (
 	"testing"
 
-	"github.com/Victoroide/go-ms-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/domain"
 )
 
 func TestMetadataOwnershipAndQuality(t *testing.T) {

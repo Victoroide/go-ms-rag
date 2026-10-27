@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Victoroide/go-ms-rag/internal/cleanup"
-	"github.com/Victoroide/go-ms-rag/internal/config"
+	"github.com/Victoroide/quarry-rag/internal/cleanup"
+	"github.com/Victoroide/quarry-rag/internal/config"
 )
 
 const baseURL = "http://localhost:8081"

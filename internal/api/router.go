@@ -4,14 +4,14 @@ package api
 import (
 	"net/http"
 
-	"github.com/Victoroide/go-ms-rag/internal/api/handler"
-	"github.com/Victoroide/go-ms-rag/internal/api/middleware"
-	"github.com/Victoroide/go-ms-rag/internal/config"
-	"github.com/Victoroide/go-ms-rag/internal/domain"
-	"github.com/Victoroide/go-ms-rag/internal/llm"
-	"github.com/Victoroide/go-ms-rag/internal/retriever"
-	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
-	"github.com/Victoroide/go-ms-rag/internal/worker"
+	"github.com/Victoroide/quarry-rag/internal/api/handler"
+	"github.com/Victoroide/quarry-rag/internal/api/middleware"
+	"github.com/Victoroide/quarry-rag/internal/config"
+	"github.com/Victoroide/quarry-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/llm"
+	"github.com/Victoroide/quarry-rag/internal/retriever"
+	s3store "github.com/Victoroide/quarry-rag/internal/store/s3"
+	"github.com/Victoroide/quarry-rag/internal/worker"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

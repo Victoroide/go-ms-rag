@@ -1,4 +1,4 @@
-// Package main is the entry point for the go-ms-rag microservice.
+// Package main is the entry point for the Quarry microservice.
 // It wires all dependencies and starts the HTTP server.
 package main
 
@@ -15,19 +15,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Victoroide/go-ms-rag/internal/api"
-	"github.com/Victoroide/go-ms-rag/internal/chunker"
-	"github.com/Victoroide/go-ms-rag/internal/config"
-	"github.com/Victoroide/go-ms-rag/internal/domain"
-	"github.com/Victoroide/go-ms-rag/internal/embedder"
-	"github.com/Victoroide/go-ms-rag/internal/llm"
-	"github.com/Victoroide/go-ms-rag/internal/pipeline"
-	"github.com/Victoroide/go-ms-rag/internal/retriever"
-	memstore "github.com/Victoroide/go-ms-rag/internal/store/memory"
-	pcstore "github.com/Victoroide/go-ms-rag/internal/store/pinecone"
-	pgstore "github.com/Victoroide/go-ms-rag/internal/store/postgres"
-	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
-	"github.com/Victoroide/go-ms-rag/internal/worker"
+	"github.com/Victoroide/quarry-rag/internal/api"
+	"github.com/Victoroide/quarry-rag/internal/chunker"
+	"github.com/Victoroide/quarry-rag/internal/config"
+	"github.com/Victoroide/quarry-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/embedder"
+	"github.com/Victoroide/quarry-rag/internal/llm"
+	"github.com/Victoroide/quarry-rag/internal/pipeline"
+	"github.com/Victoroide/quarry-rag/internal/retriever"
+	memstore "github.com/Victoroide/quarry-rag/internal/store/memory"
+	pcstore "github.com/Victoroide/quarry-rag/internal/store/pinecone"
+	pgstore "github.com/Victoroide/quarry-rag/internal/store/postgres"
+	s3store "github.com/Victoroide/quarry-rag/internal/store/s3"
+	"github.com/Victoroide/quarry-rag/internal/worker"
 )
 
 func main() {

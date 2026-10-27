@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Victoroide/go-ms-rag/internal/config"
+	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	brtypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )

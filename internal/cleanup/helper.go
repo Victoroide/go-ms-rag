@@ -9,11 +9,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/Victoroide/go-ms-rag/internal/config"
-	"github.com/Victoroide/go-ms-rag/internal/domain"
-	pcstore "github.com/Victoroide/go-ms-rag/internal/store/pinecone"
-	pgstore "github.com/Victoroide/go-ms-rag/internal/store/postgres"
-	s3store "github.com/Victoroide/go-ms-rag/internal/store/s3"
+	"github.com/Victoroide/quarry-rag/internal/config"
+	"github.com/Victoroide/quarry-rag/internal/domain"
+	pcstore "github.com/Victoroide/quarry-rag/internal/store/pinecone"
+	pgstore "github.com/Victoroide/quarry-rag/internal/store/postgres"
+	s3store "github.com/Victoroide/quarry-rag/internal/store/s3"
 )
 
 // ObjectDeleter removes a stored source file.

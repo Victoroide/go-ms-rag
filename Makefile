@@ -2,7 +2,7 @@
 
 # Run inside container — no host deps needed
 build:
-	docker build --target builder -t go-ms-rag:build .
+	docker build --target builder -t quarry-rag:build .
 
 # Run static analysis on the host.
 vet:
@@ -20,7 +20,7 @@ ci:
 	$(MAKE) vet
 	$(MAKE) lint
 	$(MAKE) test
-	docker build --target runtime -t go-ms-rag:prod .
+	docker build --target runtime -t quarry-rag:prod .
 
 # Start the full stack
 up:

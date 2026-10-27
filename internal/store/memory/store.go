@@ -13,7 +13,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/Victoroide/go-ms-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/domain"
 )
 
 // FakeVectorStore is a thread-safe in-memory vector store. It implements

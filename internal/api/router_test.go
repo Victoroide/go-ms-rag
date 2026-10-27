@@ -6,9 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Victoroide/go-ms-rag/internal/config"
-	"github.com/Victoroide/go-ms-rag/internal/domain"
-	"github.com/Victoroide/go-ms-rag/internal/store/memory"
+	"github.com/Victoroide/quarry-rag/internal/config"
+	"github.com/Victoroide/quarry-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/store/memory"
 )
 
 type probeStore struct{ domain.ChunkStore }

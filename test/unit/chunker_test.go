@@ -3,8 +3,8 @@ package unit
 import (
 	"testing"
 
-	"github.com/Victoroide/go-ms-rag/internal/chunker"
-	"github.com/Victoroide/go-ms-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/chunker"
+	"github.com/Victoroide/quarry-rag/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

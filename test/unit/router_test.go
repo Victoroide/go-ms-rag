@@ -3,8 +3,8 @@ package unit
 import (
 	"testing"
 
-	"github.com/Victoroide/go-ms-rag/internal/config"
-	"github.com/Victoroide/go-ms-rag/internal/llm"
+	"github.com/Victoroide/quarry-rag/internal/config"
+	"github.com/Victoroide/quarry-rag/internal/llm"
 	"github.com/stretchr/testify/assert"
 )
 

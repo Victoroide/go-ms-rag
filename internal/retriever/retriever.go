@@ -8,7 +8,7 @@ import (
 	"log"
 	"sort"
 
-	"github.com/Victoroide/go-ms-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/domain"
 )
 
 const (

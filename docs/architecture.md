@@ -2,7 +2,7 @@
 
 ## System Components
 
-`go-ms-rag` organizes core functionality into distinct packages under `internal/`, wired together at startup by `cmd/server/main.go`.
+Quarry organizes core functionality into distinct packages under `internal/`, wired together at startup by `cmd/server/main.go`.
 
 ```mermaid
 flowchart TD

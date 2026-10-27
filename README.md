@@ -1,6 +1,6 @@
-# go-ms-rag
+# Quarry
 
-`go-ms-rag` is a domain-agnostic retrieval-augmented generation (RAG) microservice written in Go. It provides HTTP endpoints for backend applications and distributed services to ingest textual documents (raw JSON or multipart PDF, DOCX, DOC files), generate vector embeddings, persist document metadata, and answer natural-language queries grounded in the indexed corpus.
+Quarry (`quarry-rag`) is a domain-agnostic retrieval-augmented generation (RAG) microservice written in Go. It provides HTTP endpoints for backend applications and distributed services to ingest textual documents (raw JSON or multipart PDF, DOCX, DOC files), generate vector embeddings, persist document metadata, and answer natural-language queries grounded in the indexed corpus.
 
 ## Features
 

@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Victoroide/go-ms-rag/internal/chunker"
-	"github.com/Victoroide/go-ms-rag/internal/domain"
-	"github.com/Victoroide/go-ms-rag/internal/textutil"
+	"github.com/Victoroide/quarry-rag/internal/chunker"
+	"github.com/Victoroide/quarry-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/textutil"
 	"github.com/stretchr/testify/assert"
 )
 

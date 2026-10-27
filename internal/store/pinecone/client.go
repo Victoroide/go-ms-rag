@@ -9,8 +9,8 @@ import (
 	"math"
 	"sync"
 
-	"github.com/Victoroide/go-ms-rag/internal/config"
-	"github.com/Victoroide/go-ms-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/config"
+	"github.com/Victoroide/quarry-rag/internal/domain"
 	"github.com/pinecone-io/go-pinecone/pinecone"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

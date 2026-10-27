@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Victoroide/go-ms-rag/internal/extractor"
+	"github.com/Victoroide/quarry-rag/internal/extractor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -3,7 +3,7 @@ package pipeline
 import (
 	"testing"
 
-	"github.com/Victoroide/go-ms-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/domain"
 )
 
 func sc(docID string, score float64) domain.ScoredChunk {

@@ -3,8 +3,8 @@ package unit
 import (
 	"testing"
 
-	"github.com/Victoroide/go-ms-rag/internal/pipeline"
-	"github.com/Victoroide/go-ms-rag/internal/retriever"
+	"github.com/Victoroide/quarry-rag/internal/pipeline"
+	"github.com/Victoroide/quarry-rag/internal/retriever"
 	"github.com/stretchr/testify/assert"
 )
 
