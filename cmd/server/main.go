@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Victoroide/quarry-rag/internal/api"
+	"github.com/Victoroide/quarry-rag/internal/api/handler"
 	"github.com/Victoroide/quarry-rag/internal/chunker"
 	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/Victoroide/quarry-rag/internal/domain"
@@ -158,6 +159,7 @@ func run() error {
 	}()
 
 	// Build HTTP router.
+	probes := handler.NewProbes(vectorStore, pgClient, s3Client, cfg.HealthCacheTTL)
 	router := api.NewRouter(&api.RouterDeps{
 		VectorStore:    vectorStore,
 		ChunkStore:     pgClient,
@@ -168,6 +170,7 @@ func run() error {
 		S3Client:       s3Client,
 		PineconeDriver: vecDeleter,
 		PGPool:         pgClient.Pool,
+		Probes:         probes,
 	})
 
 	srv := &http.Server{
@@ -186,10 +189,10 @@ func run() error {
 		return fmt.Errorf("server: listen: %w", err)
 	}
 	logger.Info("starting server", "address", srv.Addr)
-	return serve(signalCtx, srv, listener)
+	return serve(signalCtx, srv, listener, probes, cfg.ShutdownDrainDelay)
 }
 
-func serve(ctx context.Context, srv *http.Server, listener net.Listener) error {
+func serve(ctx context.Context, srv *http.Server, listener net.Listener, probes *handler.Probes, drain time.Duration) error {
 	result := make(chan error, 1)
 	go func() { result <- srv.Serve(listener) }()
 	select {
@@ -199,6 +202,16 @@ func serve(ctx context.Context, srv *http.Server, listener net.Listener) error {
 		}
 		return nil
 	case <-ctx.Done():
+		secondSignal := make(chan os.Signal, 1)
+		signal.Notify(secondSignal, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(secondSignal)
+		probes.SetDraining(true)
+		timer := time.NewTimer(drain)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-secondSignal:
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
