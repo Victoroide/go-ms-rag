@@ -3,24 +3,25 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
 
-	"github.com/Victoroide/quarry-rag/internal/chunker"
 	"github.com/Victoroide/quarry-rag/internal/domain"
 	"github.com/Victoroide/quarry-rag/internal/pipeline"
 )
 
 // IngestTask represents a document to be ingested asynchronously.
 type IngestTask struct {
-	DocumentID domain.DocumentID
-	Content    string
-	Metadata   map[string]any
-	FileName   *string
-	FileType   *string
-	S3Key      *string
-	DocType    string
+	DocumentID     domain.DocumentID
+	CallerSupplied bool
+	Content        string
+	Metadata       map[string]any
+	FileName       *string
+	FileType       *string
+	S3Key          *string
+	DocType        string
 }
 
 // Worker processes ingest tasks from a buffered channel queue.
@@ -134,15 +135,16 @@ func (w *Worker) processTask(ctx context.Context, task IngestTask) {
 		}
 	}()
 
-	// Check fingerprint for dedup.
-	fp := chunker.Fingerprint(task.Content)
-	existingID, exists, err := w.cs.CheckFingerprint(ctx, fp)
-	if err != nil {
-		log.Printf("worker: fingerprint check for document %s: %v", task.DocumentID, err)
-	}
-	if exists {
-		log.Printf("worker: document %s is duplicate of %s, skipping", task.DocumentID, existingID)
-		return
+	if task.CallerSupplied {
+		doc, err := w.cs.GetDocument(ctx, task.DocumentID)
+		if err != nil {
+			log.Printf("worker: document lookup for %s: %v", task.DocumentID, err)
+			return
+		}
+		if doc != nil {
+			log.Printf("worker: document %s already exists, skipping", task.DocumentID)
+			return
+		}
 	}
 
 	ic := pipeline.NewIngestContext(task.DocumentID, task.Content, task.Metadata)
@@ -150,9 +152,12 @@ func (w *Worker) processTask(ctx context.Context, task IngestTask) {
 	ic.FileType = task.FileType
 	ic.S3Key = task.S3Key
 	ic.DocType = task.DocType
-	_, err = pipeline.RunIngestionPipeline(ctx, ic, w.stages)
+	_, err := pipeline.RunIngestionPipeline(ctx, ic, w.stages)
 	if err != nil {
 		log.Printf("worker: ingest failed for document %s: %v", task.DocumentID, err)
+		if errors.Is(err, domain.ErrDocumentExists) {
+			return
+		}
 		if statusErr := w.recordFailure(ctx, task.DocumentID); statusErr != nil {
 			log.Printf("worker: update status to failed for %s: %v", task.DocumentID, statusErr)
 		}

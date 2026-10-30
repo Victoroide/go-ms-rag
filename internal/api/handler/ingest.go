@@ -10,12 +10,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Victoroide/quarry-rag/internal/chunker"
 	"github.com/Victoroide/quarry-rag/internal/domain"
 	"github.com/Victoroide/quarry-rag/internal/extractor"
 	s3store "github.com/Victoroide/quarry-rag/internal/store/s3"
 	"github.com/Victoroide/quarry-rag/internal/worker"
-	"github.com/google/uuid"
 )
 
 // JSON escaping can expand each content byte sixfold; reserve room for metadata.
@@ -23,10 +21,8 @@ const ingestJSONBodyLimit = 6*domain.MaxContentBytes + 2<<20
 
 // IngestRequest is the POST /ingest request body.
 //
-// DocumentID is optional. When the caller supplies a valid UUID it becomes
-// the persisted document identity (Pinecone namespace + metadata doc_id +
-// Postgres documents.id). Callers may keep their own primary key as the
-// canonical reference. Omitted or malformed values generate a fresh UUID.
+// DocumentID is optional. Supplied UUIDs become the persisted document identity;
+// malformed values are rejected. Omitted values generate a fresh UUID.
 type IngestRequest struct {
 	DocumentID string         `json:"document_id,omitempty"`
 	Content    string         `json:"content"`
@@ -48,19 +44,6 @@ func validateIngestRequest(req *IngestRequest) *APIError {
 		return &APIError{Error: "validation", Message: "content exceeds maximum length of 1000000 bytes"}
 	}
 	return nil
-}
-
-// resolveDocumentID returns the caller's UUID when supplied and valid;
-// otherwise a freshly generated one. This preserves callers that don't
-// send an id while letting upstream systems carry their own primary key
-// through Pinecone/Postgres.
-func resolveDocumentID(supplied string) string {
-	if supplied != "" {
-		if parsed, err := uuid.Parse(supplied); err == nil {
-			return parsed.String()
-		}
-	}
-	return uuid.New().String()
 }
 
 // IngestHandler returns an HTTP handler for POST /ingest.
@@ -93,30 +76,17 @@ func handleJSONIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 		return
 	}
 
-	fp := chunker.Fingerprint(req.Content)
-	existingDocID, exists, err := cs.CheckFingerprint(r.Context(), fp)
-	if err != nil {
-		log.Printf("ingest: fingerprint check: %v", err)
-	}
-	if exists {
-		resp := IngestResponse{
-			DocumentID: string(existingDocID),
-			Status:     "already_ingested",
-		}
-		rw.Header().Set("Content-Type", "application/json")
-		rw.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(rw).Encode(resp); err != nil {
-			log.Printf("ingest: encode duplicate response: %v", err)
-		}
+	docID, proceed := checkIngestIdentity(rw, r, cs, req.DocumentID, req.Content)
+	if !proceed {
 		return
 	}
 
-	docID := resolveDocumentID(req.DocumentID)
 	task := worker.IngestTask{
-		DocumentID: domain.DocumentID(docID),
-		Content:    req.Content,
-		Metadata:   req.Metadata,
-		DocType:    req.DocType,
+		DocumentID:     domain.DocumentID(docID),
+		CallerSupplied: req.DocumentID != "",
+		Content:        req.Content,
+		Metadata:       req.Metadata,
+		DocType:        req.DocType,
 	}
 	if !wk.Enqueue(task) {
 		writeJSONError(rw, http.StatusServiceUnavailable, "queue", "ingest queue is full")
@@ -187,29 +157,15 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 		return
 	}
 
-	// Check fingerprint for dedup.
-	fp := chunker.Fingerprint(text)
-	existingDocID, exists, fpErr := cs.CheckFingerprint(r.Context(), fp)
-	if fpErr != nil {
-		log.Printf("ingest: fingerprint check: %v", fpErr)
-	}
-	if exists {
-		resp := IngestResponse{
-			DocumentID: string(existingDocID),
-			Status:     "already_ingested",
-		}
-		rw.Header().Set("Content-Type", "application/json")
-		rw.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(rw).Encode(resp); err != nil {
-			log.Printf("ingest: encode duplicate response: %v", err)
-		}
+	suppliedID := r.FormValue("document_id")
+	docID, proceed := checkIngestIdentity(rw, r, cs, suppliedID, text)
+	if !proceed {
 		return
 	}
 
 	// Read optional doc_type form field.
 	formDocType := r.FormValue("doc_type")
 
-	docID := uuid.New().String()
 	ftStr := string(ft)
 	fileName := header.Filename
 
@@ -230,13 +186,14 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 	}
 
 	task := worker.IngestTask{
-		DocumentID: domain.DocumentID(docID),
-		Content:    text,
-		Metadata:   map[string]any{"source_file": fileName},
-		FileName:   &fileName,
-		FileType:   &ftStr,
-		S3Key:      s3Key,
-		DocType:    formDocType,
+		DocumentID:     domain.DocumentID(docID),
+		CallerSupplied: suppliedID != "",
+		Content:        text,
+		Metadata:       map[string]any{"source_file": fileName},
+		FileName:       &fileName,
+		FileType:       &ftStr,
+		S3Key:          s3Key,
+		DocType:        formDocType,
 	}
 	if !wk.Enqueue(task) {
 		if s3Key != nil {

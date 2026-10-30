@@ -74,7 +74,7 @@ Request fields:
 |---|---|---|---|
 | `content` | string | yes | Document text content (maximum 1,000,000 bytes after JSON decoding) |
 | `doc_type` | string | no | Document category label. Defaults to `"document"` if omitted |
-| `document_id` | string | no | Optional document UUID. When a valid UUID is provided, it is retained as the document identifier. Otherwise, a fresh UUID is generated |
+| `document_id` | string | no | Optional document UUID, retained in canonical form. Omitted or empty values generate a fresh UUID; malformed non-empty values return 400 |
 | `metadata` | object | no | Optional arbitrary key-value metadata object stored in PostgreSQL and vector metadata |
 
 Response (New Document):
@@ -90,6 +90,17 @@ Response (New Document):
 Response (Duplicate Document):
 - **Status**: `200 OK`
 
+When `document_id` is supplied, an existing identifier with the same content
+fingerprint returns `already_ingested` with that same identifier. Different
+content under an existing identifier returns 409 with
+`{"error":"conflict","message":"document_id already exists with different content"}`.
+Existing documents are never overwritten.
+
+Content deduplication across identifiers applies only when `document_id` is
+omitted or empty. A new caller-supplied identifier is retained even if another
+document has identical content. Document or fingerprint lookup failures return
+503 with `{"error":"unavailable","message":"document store unavailable"}`.
+
 ```json
 {
   "document_id": "8a3e792c-5df6-4b6e-a612-4f7db4959db2",
@@ -101,11 +112,13 @@ Error Status Codes:
 
 | Status | Error Category | Condition |
 |---|---|---|
-| `400 Bad Request` | `validation` | Content field missing, empty, blank whitespace, or exceeding 1,000,000 decoded bytes; trailing characters after JSON body; malformed JSON |
+| `400 Bad Request` | `validation` | Content field missing, empty, blank whitespace, or exceeding 1,000,000 decoded bytes; trailing characters after JSON body; malformed JSON; non-empty `document_id` is not a UUID (`document_id must be a UUID`) |
 | `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
+| `409 Conflict` | `conflict` | Supplied `document_id` already exists with different content |
 | `413 Payload Too Large` | `validation` | JSON request payload exceeds 8,097,152 bytes |
 | `415 Unsupported Media Type` | `validation` | Content-Type is not `application/json` or `multipart/form-data` |
 | `503 Service Unavailable` | `queue` | Ingest worker channel queue is full (`WORKER_QUEUE_SIZE` reached) |
+| `503 Service Unavailable` | `unavailable` | Document or fingerprint lookup failed |
 
 Example:
 
@@ -134,17 +147,24 @@ Form fields:
 |---|---|---|---|
 | `file` | file binary | yes | Binary file to extract and ingest. Accepted formats: PDF, DOCX, DOC |
 | `doc_type` | string | no | Document category label. Defaults to `"document"` if omitted |
+| `document_id` | string | no | Optional document UUID with the same identity and conflict rules as JSON requests, applied to extracted text |
+
+New uploads return 202 with the retained or generated identifier. Identical
+resubmissions under an existing identifier return 200 `already_ingested` with
+the same identifier. Without `document_id`, uploads use content deduplication.
 
 Error Status Codes:
 
 | Status | Error Category | Condition |
 |---|---|---|
-| `400 Bad Request` | `validation` | Form `file` part missing or read error |
+| `400 Bad Request` | `validation` | Form `file` part missing or read error; non-empty `document_id` is not a UUID |
 | `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
+| `409 Conflict` | `conflict` | Supplied `document_id` already exists with different extracted text |
 | `413 Payload Too Large` | `validation` | Upload exceeds `MAX_UPLOAD_BYTES` |
 | `415 Unsupported Media Type` | `validation` | Uploaded file extension is not pdf, docx, or doc |
 | `422 Unprocessable Entity` | `extraction` | Document text extraction failed (e.g., malformed binary structure, extracted PDF, DOCX, DOC or text exceeding 1,000,000 bytes, expanded DOCX XML exceeding 16 MiB, a DOC stream declaring a size larger than the file, or PDF extraction work exceeding its limits) |
 | `503 Service Unavailable` | `queue` | Ingest worker channel queue is full; rolls back S3 object if uploaded |
+| `503 Service Unavailable` | `unavailable` | Document or fingerprint lookup failed |
 
 Example:
 
