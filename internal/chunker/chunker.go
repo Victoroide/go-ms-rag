@@ -17,175 +17,151 @@ import (
 	"github.com/Victoroide/quarry-rag/internal/textutil"
 )
 
-const (
-	// tokenApproximationFactor is the multiplier applied to word count
-	// to approximate subword token count in typical LLM tokenizers.
-	tokenApproximationFactor = 1.3
-)
-
 // Chunker splits raw text into Chunks using semantic-aware boundaries.
 type Chunker struct {
 	chunkSize int
 	overlap   int
 }
 
-// NewChunker creates a Chunker with the given chunk size and overlap
-// expressed in approximate token counts.
+// NewChunker creates a Chunker with estimated token budgets. Sizes below two
+// are treated as two, the minimum estimate for a non-dense character.
 func NewChunker(chunkSize, overlap int) *Chunker {
+	chunkSize = max(2, chunkSize)
 	return &Chunker{
 		chunkSize: chunkSize,
-		overlap:   overlap,
+		overlap:   min(max(0, overlap), chunkSize-1),
 	}
 }
 
-// Chunk splits text into Chunks of approximately chunkSize tokens.
-//
-// The strategy:
-//
-//  1. Strip HTML when recognizable markup is present.
-//  2. Normalise for ingest: NFC, width folding, hyphenation fix and paragraph-aware
-//     line break handling (via textutil.NormalizeForIngest).
-//  3. Split into paragraphs.
-//  4. Within a paragraph, split into sentences.
-//  5. Greedily accumulate sentences into a chunk until the next
-//     sentence would push the chunk past wordsPerChunk; then emit and
-//     carry over the last `overlap` sentences to the next chunk.
-//  6. Cross paragraph boundaries with a paragraph-break marker so
-//     prose stays readable inside the chunk text.
-//  7. Tag each emitted chunk with a (kind, quality) classification.
+type textUnit struct {
+	text      string
+	separator string
+	estimate  tokenEstimate
+}
+
+// Chunk splits normalized text at paragraph, sentence, word and rune boundaries.
+// Every chunk stays within the estimated token and byte limits, and overlapping
+// windows always include previously unemitted text.
 func (c *Chunker) Chunk(docID domain.DocumentID, text string) []domain.Chunk {
-	cleaned := stripHTML(text)
-	cleaned = textutil.NormalizeForIngest(cleaned)
-	if cleaned == "" {
-		return nil
-	}
-
-	wordsPerChunk := int(float64(c.chunkSize) / tokenApproximationFactor)
-	if wordsPerChunk < 1 {
-		wordsPerChunk = 1
-	}
-	wordsOverlap := int(float64(c.overlap) / tokenApproximationFactor)
-	if wordsOverlap >= wordsPerChunk {
-		wordsOverlap = wordsPerChunk - 1
-	}
-	if wordsOverlap < 0 {
-		wordsOverlap = 0
-	}
-
-	type sentence struct {
-		text      string
-		wordCount int
-		paragraph int
-	}
-
-	// Flatten the document into a stream of sentences tagged with
-	// their owning paragraph index, so we can re-insert paragraph
-	// breaks inside emitted chunks when the chunk spans paragraphs.
-	var stream []sentence
-	for i, para := range textutil.SplitParagraphs(cleaned) {
-		for _, sent := range textutil.SplitSentences(para) {
-			wc := len(strings.Fields(sent))
-			if wc == 0 {
-				continue
+	cleaned := textutil.NormalizeForIngest(stripHTML(text))
+	var units []textUnit
+	for i, paragraph := range textutil.SplitParagraphs(cleaned) {
+		for j, sentence := range textutil.SplitSentences(paragraph) {
+			separator := " "
+			if i > 0 && j == 0 {
+				separator = "\n\n"
 			}
-			stream = append(stream, sentence{
-				text:      sent,
-				wordCount: wc,
-				paragraph: i,
-			})
+			units = c.appendSentence(units, sentence, separator)
 		}
-	}
-	if len(stream) == 0 {
-		return nil
 	}
 
 	var chunks []domain.Chunk
-	chunkIndex := 0
-	startIdx := 0
-
-	for startIdx < len(stream) {
-		endIdx := startIdx
-		wordTotal := 0
-		// Accumulate sentences until adding the next one would exceed
-		// wordsPerChunk. Always include at least one sentence so a
-		// single very long sentence still emits.
-		for endIdx < len(stream) {
-			next := stream[endIdx].wordCount
-			if endIdx > startIdx && wordTotal+next > wordsPerChunk {
+	start, nextNew := 0, 0
+	for nextNew < len(units) {
+		end, size := start, 0
+		var estimate tokenEstimate
+		for end < len(units) {
+			unit := units[end]
+			separator := ""
+			if end > start {
+				separator = unit.separator
+			}
+			nextEstimate := estimate.append(unit.estimate, separator != "")
+			nextSize := size + len(separator) + len(unit.text)
+			if nextEstimate.count() > c.chunkSize || nextSize > MaxChunkBytes {
 				break
 			}
-			wordTotal += next
-			endIdx++
+			estimate, size = nextEstimate, nextSize
+			end++
 		}
-		// If a single sentence is itself larger than wordsPerChunk
-		// (e.g. PDF extracted a whole bulleted block as one line),
-		// hard-split it on word boundary as a fallback.
-		if endIdx == startIdx+1 && stream[startIdx].wordCount > wordsPerChunk {
-			words := strings.Fields(stream[startIdx].text)
-			for w := 0; w < len(words); w += wordsPerChunk {
-				end := w + wordsPerChunk
-				if end > len(words) {
-					end = len(words)
-				}
-				piece := strings.Join(words[w:end], " ")
-				chunks = append(chunks, makeChunk(docID, chunkIndex, piece))
-				chunkIndex++
-			}
-			startIdx = endIdx
-			continue
-		}
-
-		// Build the chunk text, inserting "\n\n" between sentences
-		// that come from different paragraphs so the LLM downstream
-		// can still see structure.
 		var b strings.Builder
-		for i := startIdx; i < endIdx; i++ {
-			if i > startIdx {
-				if stream[i].paragraph != stream[i-1].paragraph {
-					b.WriteString("\n\n")
-				} else {
-					b.WriteByte(' ')
-				}
+		b.Grow(size)
+		for i := start; i < end; i++ {
+			if i > start {
+				b.WriteString(units[i].separator)
 			}
-			b.WriteString(stream[i].text)
+			b.WriteString(units[i].text)
 		}
-		chunkText := strings.TrimSpace(b.String())
-		if chunkText != "" {
-			chunks = append(chunks, makeChunk(docID, chunkIndex, chunkText))
-			chunkIndex++
-		}
-
-		// Reached the end?
-		if endIdx >= len(stream) {
+		chunks = append(chunks, makeChunk(docID, len(chunks), b.String()))
+		nextNew = end
+		if end == len(units) {
 			break
 		}
-		// Build overlap by walking back from endIdx until we either
-		// reach the chunk start or have collected wordsOverlap words.
-		overlapStart := endIdx
-		overlapWords := 0
-		for overlapStart > startIdx+1 && overlapWords < wordsOverlap {
-			overlapStart--
-			overlapWords += stream[overlapStart].wordCount
-		}
-		// Guarantee forward progress so we never loop infinitely.
-		if overlapStart <= startIdx {
-			overlapStart = startIdx + 1
-		}
-		startIdx = overlapStart
-	}
 
+		overlapStart := end
+		suffixSize := 0
+		var suffix tokenEstimate
+		for i := end - 1; i > start; i-- {
+			nextSuffix := units[i].estimate
+			nextSize := len(units[i].text)
+			if i < end-1 {
+				nextSuffix = nextSuffix.append(suffix, units[i+1].separator != "")
+				nextSize += len(units[i+1].separator) + suffixSize
+			}
+			// Retain only a suffix that leaves room for the first new unit.
+			withNew := nextSuffix.append(units[nextNew].estimate, units[nextNew].separator != "")
+			if nextSuffix.count() > c.overlap || withNew.count() > c.chunkSize ||
+				nextSize+len(units[nextNew].separator)+len(units[nextNew].text) > MaxChunkBytes {
+				break
+			}
+			suffix = nextSuffix
+			suffixSize = nextSize
+			overlapStart = i
+		}
+		start = overlapStart
+	}
 	return chunks
 }
 
+func (c *Chunker) appendSentence(units []textUnit, sentence, separator string) []textUnit {
+	estimate := measureTokens(sentence)
+	if estimate.count() <= c.chunkSize && len(sentence) <= MaxChunkBytes {
+		return append(units, textUnit{sentence, separator, estimate})
+	}
+	for i, word := range strings.Fields(sentence) {
+		if i > 0 {
+			separator = " "
+		}
+		estimate = measureTokens(word)
+		if estimate.count() <= c.chunkSize && len(word) <= MaxChunkBytes {
+			units = append(units, textUnit{word, separator, estimate})
+			continue
+		}
+		units = c.appendWord(units, word, separator)
+	}
+	return units
+}
+
+func (c *Chunker) appendWord(units []textUnit, word, separator string) []textUnit {
+	// Smaller fragments let successive windows share part of a long word.
+	fragmentSize := c.chunkSize
+	if c.overlap > 0 {
+		fragmentSize = min(c.overlap, c.chunkSize-c.overlap)
+	}
+	start := 0
+	var estimate tokenEstimate
+	for offset, r := range word {
+		next := estimate
+		next.addRune(r)
+		if offset > start && (next.count() > fragmentSize || offset-start+len(string(r)) > MaxChunkBytes) {
+			units = append(units, textUnit{word[start:offset], separator, estimate})
+			start, separator, estimate = offset, "", tokenEstimate{}
+			estimate.addRune(r)
+		} else {
+			estimate = next
+		}
+	}
+	return append(units, textUnit{word[start:], separator, estimate})
+}
+
 func makeChunk(docID domain.DocumentID, index int, text string) domain.Chunk {
-	tokenCount := approximateTokens(strings.Fields(text))
 	kind, quality := Classify(text)
 	return domain.Chunk{
 		ID:         domain.ChunkID(chunkID(string(docID), index)),
 		DocumentID: docID,
 		Index:      index,
 		Text:       text,
-		TokenCount: tokenCount,
+		TokenCount: EstimateTokens(text),
 		Metadata: map[string]any{
 			"kind":    string(kind),
 			"quality": string(quality),
@@ -202,10 +178,6 @@ func Fingerprint(content string) string {
 // ChunkFingerprint computes a SHA-256 hex fingerprint for a single chunk.
 func ChunkFingerprint(text string) string {
 	return Fingerprint(text)
-}
-
-func approximateTokens(words []string) int {
-	return int(float64(len(words)) * tokenApproximationFactor)
 }
 
 func chunkID(docID string, index int) string {
