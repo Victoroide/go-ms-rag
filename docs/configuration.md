@@ -9,6 +9,8 @@ The table below lists every environment variable parsed by the service:
 | Variable | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `SERVER_PORT` | string | `"8081"` | 1 to 65535 | TCP port on which the HTTP server listens. |
+| `SHUTDOWN_DRAIN_DELAY` | duration | `5s` | 0s to 60s | Delay after readiness starts returning draining, before HTTP shutdown. A second termination signal skips the remaining delay. |
+| `HEALTH_CACHE_TTL` | duration | `10s` | 1s to 5m | Lifetime of the dependency snapshot shared by diagnostics and readiness. Concurrent requests share one refresh; failures are cached too. |
 | `AWS_REGION` | string | `""` | Valid AWS region identifier | AWS region used for AWS Bedrock API calls and S3 object storage. Required when `GO_RAG_FAKE_MODE=false`. |
 | `AWS_ACCESS_KEY_ID` | string | `""` | Set together with `AWS_SECRET_ACCESS_KEY`, or leave both empty | Optional static AWS access key ID. When both keys are empty, AWS clients use the default credential chain. |
 | `AWS_SECRET_ACCESS_KEY` | string | `""` | Set together with `AWS_ACCESS_KEY_ID`, or leave both empty | Optional static AWS secret access key. |
