@@ -67,6 +67,7 @@ go test ./test/unit/... -count=1 -v
 Scope of unit tests:
 - **Chunker (`chunker_test.go`)**: Validates word window boundaries, token approximation formulas, HTML sanitization, and SHA-256 fingerprint generation.
 - **Extractor (`extractor_test.go`)**: Validates text extraction from synthetic PDF, DOCX, DOC, and plain text buffers, including XML expansion limits and context cancellations.
+- **DOC (`internal/extractor/doc_test.go`)**: Covers Word 97–2003 piece tables, Windows-1252 and UTF-16 text, nested field codes, corrupt structures, encrypted and older files, and decoded-text limits.
 - **Fake Mode (`fakemode_test.go`)**: Verifies deterministic in-memory vector storage, mock embeddings, and fake converser outputs.
 - **Named Entities (`named_entity_test.go`)**: Tests proper noun phrase extraction, stop-word filtering, and Unicode capitalization handling.
 - **Retriever (`retriever_test.go`)**: Verifies LOCAL vs. GLOBAL mode determination, similarity score thresholding, and fallback search triggering when fewer than 3 chunks are returned.

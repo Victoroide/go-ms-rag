@@ -72,6 +72,7 @@ Notable changes are grouped by release.
 - `GET /documents` returns an empty array instead of `null` and streams large listings.
 - Preserve superscripts, fractions, circled numbers and text between comparison operators during ingestion; keep carriage-return paragraph breaks; strip HTML only from documents that contain markup.
 - Reject embeddings whose length differs from `EMBEDDING_DIMENSIONS`.
+- Extract legacy `.doc` text through the document piece table, keeping accented and non-Latin characters and dropping field codes and binary noise; encrypted and pre-Word 97 files return 422.
 - Retain source files for caller-owned documents with identical text and after uncertain acceptance results; bound acceptance independently of caller cancellation.
 - Clear existing vectors before each ingestion attempt and again after document deletion; perform terminal cleanup under the live lease before recording failure.
 - Reject NUL characters in document labels before storage.
