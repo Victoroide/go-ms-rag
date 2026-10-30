@@ -6,7 +6,7 @@ Quarry organizes core functionality into distinct packages under `internal/`, wi
 
 ```mermaid
 flowchart TD
-    Client["Client / Upstream Service"] -->|"HTTP Request (X-Service-Token)"| Router["HTTP Router & Middleware\n(Logging, Recovery, Auth)"]
+    Client["Client / Upstream Service"] -->|"HTTP Request (X-Service-Token)"| Router["HTTP Router & Middleware\n(RequestID, Metrics, Logging, Recovery, Auth)"]
 
     subgraph API ["Transport Layer (internal/api)"]
         Router --> H_Health["HealthHandler\nGET /health"]
@@ -328,3 +328,28 @@ By default, PDF, DOCX and DOC extraction executes in a child process of the serv
 PDF, DOCX, DOC and text extraction enforce the same 1,000,000-byte text limit. DOCX counts text and separators while parsing and bounds document XML at 16 MiB. Legacy DOC streams must declare a positive size no larger than the source file; stream reads respect cancellation and stop at the declared size. PDF extraction checks relevant decoded streams against a cumulative 8 MiB budget before text parsing; it also bounds source reads, page count, font count, Unicode font-map size and declarations, and stream nesting. It honors the caller's deadline and otherwise applies a 30-second default. Extraction-limit failures use HTTP 422.
 
 Failure-status updates use a separate five-second context after task cancellation. Deletion treats missing vector namespaces as completed operations, allowing partial deletions to be retried before metadata is removed.
+
+### Metrics Collection
+
+The middleware order is `RequestID(Metrics(Logging(Recovery(mux))))`. Metrics read
+the matched route pattern after dispatch, so document identifiers and unmatched
+raw paths never become labels. Recovered failures retain their final HTTP status.
+The separate metrics listener serves Prometheus text without an additional module.
+
+- `quarry_http_requests_total{route,code}` counts HTTP responses.
+- `quarry_http_request_duration_seconds{route}` observes request duration.
+- `quarry_pipeline_stage_duration_seconds{stage}` observes executed ingestion and
+  retrieval stages, including stages that return an error.
+- `quarry_ingest_jobs_total{result}` counts successful `completed`, `retried`,
+  `failed` and `released` transitions made by the ingestion processor. Rejected or
+  failed state updates do not increment counters. Expired-lease cleanup performed
+  by the claim query is outside these processor outcome counters.
+- `quarry_ingest_jobs_pending` counts pending rows in `ingest_jobs`, including
+  delayed retries and excluding running jobs, with a shared 10-second cache per
+  process. Failed refreshes retain the last good value, or `NaN` initially.
+- `quarry_query_mode_total{mode}` counts each routed query once using its effective
+  `LOCAL` or `GLOBAL` mode, including queries that subsequently fail synthesis.
+
+`METRICS_ADDR` enables this listener; an empty value disables it. Both HTTP
+listeners remain available during the readiness drain delay and then shut down
+together before ingestion processing and storage connections close.
