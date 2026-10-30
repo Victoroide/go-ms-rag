@@ -13,7 +13,7 @@ import (
 
 	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/Victoroide/quarry-rag/internal/domain"
-	"github.com/pinecone-io/go-pinecone/pinecone"
+	"github.com/pinecone-io/go-pinecone/v5/pinecone"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -23,7 +23,7 @@ import (
 const maxUpsertBytes = 1572864
 
 // Client wraps the official Pinecone Go SDK.
-// The default namespace shares one connection; other connections are short lived.
+// All namespaces share one connection.
 type Client struct {
 	client      *pinecone.Client
 	cfg         *config.Config
@@ -52,19 +52,23 @@ func NewPineconeClient(ctx context.Context, cfg *config.Config) (*Client, error)
 	if validationErr := validateIndex(idx, cfg); validationErr != nil {
 		return nil, validationErr
 	}
-	p := &Client{
-		client: pc, cfg: cfg, batchSize: cfg.PineconeUpsertBatchSize,
-		timeout: cfg.PineconeTimeout, maxAttempts: cfg.PineconeMaxAttempts, dims: cfg.EmbeddingDimensions,
-		dial: func(namespace string) (indexConn, error) {
-			return pc.Index(pinecone.NewIndexConnParams{Host: idx.Host, Namespace: namespace})
-		},
-	}
-	p.defaultConn, err = p.dial("")
+	defaultConn, err := pc.Index(pinecone.NewIndexConnParams{Host: idx.Host})
 	if err != nil {
 		return nil, fmt.Errorf("pinecone: connect to default namespace: %w", err)
 	}
-	log.Printf("pinecone: connected to index %q (host=%s, dimension=%d)", cfg.PineconeIndexName, idx.Host, idx.Dimension)
+	p := newClient(pc, cfg, defaultConn)
+	log.Printf("pinecone: connected to index %q (host=%s, dimension=%d)", cfg.PineconeIndexName, idx.Host, *idx.Dimension)
 	return p, nil
+}
+
+func newClient(pc *pinecone.Client, cfg *config.Config, root *pinecone.IndexConnection) *Client {
+	return &Client{
+		client: pc, cfg: cfg, defaultConn: root, batchSize: cfg.PineconeUpsertBatchSize,
+		timeout: cfg.PineconeTimeout, maxAttempts: cfg.PineconeMaxAttempts, dims: cfg.EmbeddingDimensions,
+		dial: func(namespace string) (indexConn, error) {
+			return root.WithNamespace(namespace), nil
+		},
+	}
 }
 
 func (p *Client) conn(namespace string) (indexConn, func(), error) {
@@ -75,7 +79,8 @@ func (p *Client) conn(namespace string) (indexConn, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("pinecone: connect to namespace %q: %w", namespace, err)
 	}
-	return conn, func() { _ = conn.Close() }, nil
+	// Derived connections share the default transport and must not be closed.
+	return conn, func() {}, nil
 }
 
 // Upsert inserts or updates vectors in the specified namespace.
@@ -110,7 +115,7 @@ func (p *Client) Upsert(ctx context.Context, namespace string, chunks []domain.C
 		if size > maxUpsertBytes {
 			return fmt.Errorf("pinecone: chunk %s exceeds the upsert byte limit", c.ID)
 		}
-		vectors = append(vectors, &pinecone.Vector{Id: string(c.ID), Values: c.Embedding, Metadata: md})
+		vectors = append(vectors, &pinecone.Vector{Id: string(c.ID), Values: &c.Embedding, Metadata: md})
 		sizes = append(sizes, size)
 	}
 	if len(vectors) == 0 {

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Victoroide/quarry-rag/internal/config"
-	"github.com/pinecone-io/go-pinecone/pinecone"
+	"github.com/pinecone-io/go-pinecone/v5/pinecone"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -25,6 +25,8 @@ type indexConn interface {
 	DeleteAllVectorsInNamespace(context.Context) error
 	Close() error
 }
+
+var _ indexConn = (*pinecone.IndexConnection)(nil)
 
 func (p *Client) do(ctx context.Context, attempts int, op func(context.Context) error) error {
 	if attempts < 1 {
@@ -76,8 +78,11 @@ func validateIndex(idx *pinecone.Index, cfg *config.Config) error {
 	if idx == nil {
 		return errors.New("pinecone: missing index description")
 	}
-	if int64(idx.Dimension) != int64(cfg.EmbeddingDimensions) {
-		return fmt.Errorf("pinecone: index dimension %d does not match EMBEDDING_DIMENSIONS %d", idx.Dimension, cfg.EmbeddingDimensions)
+	if idx.Dimension == nil {
+		return errors.New("pinecone: missing index dimension")
+	}
+	if int64(*idx.Dimension) != int64(cfg.EmbeddingDimensions) {
+		return fmt.Errorf("pinecone: index dimension %d does not match EMBEDDING_DIMENSIONS %d", *idx.Dimension, cfg.EmbeddingDimensions)
 	}
 	if idx.Metric != pinecone.Cosine {
 		return fmt.Errorf("pinecone: index metric must be cosine, got %q", idx.Metric)

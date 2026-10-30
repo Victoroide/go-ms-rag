@@ -7,7 +7,7 @@ import (
 	"sort"
 
 	"github.com/Victoroide/quarry-rag/internal/domain"
-	"github.com/pinecone-io/go-pinecone/pinecone"
+	"github.com/pinecone-io/go-pinecone/v5/pinecone"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 

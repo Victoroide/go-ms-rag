@@ -23,7 +23,7 @@ import (
 	"github.com/Victoroide/quarry-rag/internal/cleanup"
 	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/google/uuid"
-	"github.com/pinecone-io/go-pinecone/pinecone"
+	"github.com/pinecone-io/go-pinecone/v5/pinecone"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 

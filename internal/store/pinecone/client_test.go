@@ -12,7 +12,7 @@ import (
 
 	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/Victoroide/quarry-rag/internal/domain"
-	"github.com/pinecone-io/go-pinecone/pinecone"
+	"github.com/pinecone-io/go-pinecone/v5/pinecone"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -89,7 +89,7 @@ func TestUpsertSplitsByCountAndBytes(t *testing.T) {
 				}
 				size := 0
 				for _, v := range vectors {
-					size += 4*len(v.Values) + len(v.Id) + proto.Size(v.Metadata) + 32
+					size += 4*len(*v.Values) + len(v.Id) + proto.Size(v.Metadata) + 32
 					if seen[v.Id] {
 						t.Fatalf("duplicate vector %s", v.Id)
 					}
@@ -213,19 +213,56 @@ func TestRecordMetadataAt40KBIsAccepted(t *testing.T) {
 }
 
 func TestValidateIndexRejectsDimensionMismatch(t *testing.T) {
-	idx := &pinecone.Index{Dimension: 512, Metric: pinecone.Cosine, Status: &pinecone.IndexStatus{Ready: true}}
+	idx := &pinecone.Index{Dimension: new(int32(512)), Metric: pinecone.Cosine, Status: &pinecone.IndexStatus{Ready: true}}
 	if err := validateIndex(idx, &config.Config{EmbeddingDimensions: 1024}); err == nil {
 		t.Fatal("accepted incompatible dimensions")
 	}
 }
+
+func TestValidateIndexRejectsMissingDimension(t *testing.T) {
+	idx := &pinecone.Index{Metric: pinecone.Cosine, Status: &pinecone.IndexStatus{Ready: true}}
+	if err := validateIndex(idx, &config.Config{EmbeddingDimensions: 1024}); err == nil {
+		t.Fatal("accepted missing dimension")
+	}
+}
+
+func TestUpsertPreservesVectorValues(t *testing.T) {
+	chunks := testChunks(2, 2, 10)
+	chunks[0].Embedding = []float32{0.25, -0.5}
+	chunks[1].Embedding = []float32{0.75, 1}
+	calls := 0
+	conn := &fakeIndexConn{upsert: func(_ context.Context, vectors []*pinecone.Vector) (uint32, error) {
+		calls++
+		if len(vectors) != 2 {
+			t.Fatalf("got %d vectors", len(vectors))
+		}
+		for i, want := range [][]float32{{0.25, -0.5}, {0.75, 1}} {
+			if vectors[i].Values == nil || len(*vectors[i].Values) != 2 {
+				t.Fatalf("missing values for vector %d", i)
+			}
+			for j, value := range want {
+				if (*vectors[i].Values)[j] != value {
+					t.Fatalf("vector %d value %d: got %v, want %v", i, j, (*vectors[i].Values)[j], value)
+				}
+			}
+		}
+		return 2, nil
+	}}
+	if err := testClient(conn).Upsert(t.Context(), "", chunks); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("upsert called %d times", calls)
+	}
+}
 func TestValidateIndexRejectsNonCosine(t *testing.T) {
-	idx := &pinecone.Index{Dimension: 1024, Metric: pinecone.Dotproduct, Status: &pinecone.IndexStatus{Ready: true}}
+	idx := &pinecone.Index{Dimension: new(int32(1024)), Metric: pinecone.Dotproduct, Status: &pinecone.IndexStatus{Ready: true}}
 	if err := validateIndex(idx, &config.Config{EmbeddingDimensions: 1024}); err == nil {
 		t.Fatal("accepted incompatible metric")
 	}
 }
 func TestValidateIndexReadiness(t *testing.T) {
-	idx := &pinecone.Index{Dimension: 1024, Metric: pinecone.Cosine}
+	idx := &pinecone.Index{Dimension: new(int32(1024)), Metric: pinecone.Cosine}
 	cfg := &config.Config{EmbeddingDimensions: 1024}
 	if err := validateIndex(idx, cfg); err == nil {
 		t.Fatal("accepted missing status")
@@ -273,7 +310,7 @@ func TestClientReusesDefaultConnection(t *testing.T) {
 	}
 }
 
-func TestLegacyNamespaceConnectionIsClosed(t *testing.T) {
+func TestLegacyNamespaceConnectionRemainsOpen(t *testing.T) {
 	client := testClient(&fakeIndexConn{})
 	var conns []*fakeIndexConn
 	client.dial = func(namespace string) (indexConn, error) {
@@ -293,13 +330,13 @@ func TestLegacyNamespaceConnectionIsClosed(t *testing.T) {
 		t.Fatalf("dialed %d connections", len(conns))
 	}
 	for _, conn := range conns {
-		if conn.closed != 1 {
+		if conn.closed != 0 {
 			t.Fatalf("closed %d times", conn.closed)
 		}
 	}
 }
 
-func TestLegacyConnectionClosesOnError(t *testing.T) {
+func TestLegacyConnectionRemainsOpenOnError(t *testing.T) {
 	conn := &fakeIndexConn{query: func(context.Context, *pinecone.QueryByVectorValuesRequest) (*pinecone.QueryVectorsResponse, error) {
 		return nil, status.Error(codes.InvalidArgument, "bad")
 	}}
@@ -308,7 +345,7 @@ func TestLegacyConnectionClosesOnError(t *testing.T) {
 	if _, err := client.Query(t.Context(), "legacy", []float32{1}, 1, ""); err == nil {
 		t.Fatal("expected query failure")
 	}
-	if conn.closed != 1 {
+	if conn.closed != 0 {
 		t.Fatalf("closed %d times", conn.closed)
 	}
 }
