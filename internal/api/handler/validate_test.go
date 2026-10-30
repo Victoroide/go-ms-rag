@@ -215,7 +215,7 @@ func validationMultipartRequest(t *testing.T, fields map[string]string) *http.Re
 	mw := multipart.NewWriter(&body)
 	file, err := mw.CreateFormFile("file", "report.pdf")
 	require.NoError(t, err)
-	_, err = file.Write([]byte("uploaded bytes"))
+	_, err = file.Write([]byte("%PDF-1.4\nuploaded bytes"))
 	require.NoError(t, err)
 	for key, value := range fields {
 		require.NoError(t, mw.WriteField(key, value))

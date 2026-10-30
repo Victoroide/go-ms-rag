@@ -139,12 +139,6 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 		}
 	}()
 
-	ft, err := extractor.DetectFileType(header.Filename)
-	if err != nil {
-		writeJSONError(rw, http.StatusUnsupportedMediaType, "validation", "unsupported file type, accepted: pdf, docx, doc")
-		return
-	}
-
 	// Read the entire file into memory for extraction and S3 upload.
 	fileData, err := io.ReadAll(file)
 	if err != nil {
@@ -157,20 +151,21 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 		return
 	}
 
-	// Extract text from the file.
-	text, extractErr := opts.extract(r.Context(), ft, fileData)
+	ft, err := extractor.ResolveContext(r.Context(), header.Filename, fileData)
+	if err != nil {
+		writeExtractionError(rw, r, err)
+		return
+	}
+
+	var text string
+	var extractErr error
+	if ft == extractor.FileTypeText {
+		text, extractErr = extractor.New(ft).Extract(r.Context(), bytes.NewReader(fileData))
+	} else {
+		text, extractErr = opts.extract(r.Context(), ft, fileData)
+	}
 	if extractErr != nil {
-		slog.ErrorContext(r.Context(), "extract uploaded text", "file_name", header.Filename, "error", extractErr)
-		status, message := http.StatusUnprocessableEntity, extractErr.Error()
-		switch {
-		case errors.Is(extractErr, extractor.ErrExtractionTimeout):
-			message = "document extraction exceeded the time limit"
-		case errors.Is(extractErr, extractor.ErrExtractionFailed):
-			message = "document could not be parsed"
-		case errors.Is(extractErr, extractor.ErrExtractionUnavailable):
-			status, message = http.StatusServiceUnavailable, "document extraction is unavailable"
-		}
-		writeJSONError(rw, status, "extraction", message)
+		writeExtractionError(rw, r, extractErr)
 		return
 	}
 

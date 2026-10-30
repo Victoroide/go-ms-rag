@@ -194,7 +194,7 @@ func durableFile(t *testing.T, fields ...map[string]string) *http.Request {
 	m := multipart.NewWriter(&b)
 	f, err := m.CreateFormFile("file", "sample.docx")
 	require.NoError(t, err)
-	_, err = f.Write([]byte("source"))
+	_, err = f.Write(buildTestDOCX("Original document source content."))
 	require.NoError(t, err)
 	for _, group := range fields {
 		for key, value := range group {

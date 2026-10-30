@@ -31,7 +31,7 @@ func uploadRequest(t *testing.T) (*http.Request, *bytes.Buffer) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := part.Write([]byte("document bytes")); err != nil {
+	if _, err := part.Write([]byte("%PDF-1.4\ndocument bytes")); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Close(); err != nil {
@@ -101,13 +101,13 @@ func TestUploadExtractionErrors(t *testing.T) {
 		{extractor.ErrExtractionTimeout, 422, "document extraction exceeded the time limit"},
 		{extractor.ErrExtractionFailed, 422, "document could not be parsed"},
 		{extractor.ErrExtractionUnavailable, 503, "document extraction is unavailable"},
-		{errors.New("invalid document"), 422, "invalid document"},
+		{errors.New("invalid document"), 422, "document could not be parsed"},
 	} {
 		t.Run(tt.message, func(t *testing.T) {
 			req, _ := uploadRequest(t)
 			rec := httptest.NewRecorder()
 			IngestHandler(nil, nil, nil, 20<<20, WithExtractor(func(ctx context.Context, ft extractor.FileType, data []byte) (string, error) {
-				if ctx != req.Context() || ft != extractor.FileTypePDF || string(data) != "document bytes" {
+				if ctx != req.Context() || ft != extractor.FileTypePDF || string(data) != "%PDF-1.4\ndocument bytes" {
 					t.Errorf("unexpected extraction input: type=%q data=%q", ft, data)
 				}
 				return "", tt.err

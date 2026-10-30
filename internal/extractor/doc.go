@@ -286,7 +286,7 @@ func cleanDOCText(text string) (string, error) {
 	}
 	cleaned := strings.TrimSpace(result.String())
 	if cleaned == "" {
-		return "", errors.New("extractor: doc: no readable text found")
+		return "", fmt.Errorf("extractor: doc: %w", ErrNoText)
 	}
 	return cleaned, nil
 }

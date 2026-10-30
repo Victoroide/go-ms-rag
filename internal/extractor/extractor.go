@@ -61,6 +61,8 @@ func New(ft FileType) Extractor {
 // ContentTypeFromFileType returns the MIME content type for a FileType.
 func ContentTypeFromFileType(ft FileType) string {
 	switch ft {
+	case FileTypeText:
+		return "text/plain; charset=utf-8"
 	case FileTypePDF:
 		return "application/pdf"
 	case FileTypeDOCX:
