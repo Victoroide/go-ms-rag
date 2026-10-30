@@ -4,7 +4,7 @@ package handler
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 )
 
@@ -29,7 +29,7 @@ func HealthHandler(p *Probes) http.HandlerFunc {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 		if err := json.NewEncoder(w).Encode(status); err != nil {
-			log.Printf("health: encode response: %v", err)
+			slog.ErrorContext(r.Context(), "encode health response", "error", err)
 		}
 	}
 }
@@ -66,6 +66,6 @@ func writeProbeStatus(w http.ResponseWriter, code int, status string) {
 	if err := json.NewEncoder(w).Encode(struct {
 		Status string `json:"status"`
 	}{Status: status}); err != nil {
-		log.Printf("health: encode response: %v", err)
+		slog.Error("encode probe response", "error", err)
 	}
 }

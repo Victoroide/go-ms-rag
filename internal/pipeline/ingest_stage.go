@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/Victoroide/quarry-rag/internal/chunker"
 	"github.com/Victoroide/quarry-rag/internal/domain"
@@ -28,12 +28,12 @@ func NewChunkStage(c *chunker.Chunker) *ChunkStage {
 func (s *ChunkStage) ID() StageID { return StageChunk }
 
 // Run splits the raw text into chunks.
-func (s *ChunkStage) Run(_ context.Context, ic *IngestContext) error {
+func (s *ChunkStage) Run(ctx context.Context, ic *IngestContext) error {
 	ic.Chunks = s.chunker.Chunk(ic.DocumentID, ic.RawText)
 	if len(ic.Chunks) == 0 {
 		return fmt.Errorf("chunk_stage: document %s: %w", ic.DocumentID, ErrNoChunks)
 	}
-	log.Printf("chunk_stage: document=%s chunks=%d", ic.DocumentID, len(ic.Chunks))
+	slog.DebugContext(ctx, "document chunked", "document_id", ic.DocumentID, "chunks", len(ic.Chunks))
 	return nil
 }
 
@@ -71,7 +71,7 @@ func (s *EmbedStage) Run(ctx context.Context, ic *IngestContext) error {
 	if err := group.Wait(); err != nil {
 		return err
 	}
-	log.Printf("embed_stage: document=%s embedded=%d chunks", ic.DocumentID, len(ic.Chunks))
+	slog.DebugContext(ctx, "document chunks embedded", "document_id", ic.DocumentID, "chunks", len(ic.Chunks))
 	return nil
 }
 
@@ -113,6 +113,6 @@ func (s *PersistStage) Run(ctx context.Context, ic *IngestContext) error {
 		return fmt.Errorf("persist_stage: upsert to default namespace: %w", err)
 	}
 
-	log.Printf("persist_stage: document=%s doc_type=%s chunks=%d persisted", ic.DocumentID, docType, len(ic.Chunks))
+	slog.DebugContext(ctx, "document vectors persisted", "document_id", ic.DocumentID, "doc_type", docType, "chunks", len(ic.Chunks))
 	return nil
 }

@@ -175,11 +175,6 @@ func Fingerprint(content string) string {
 	return fmt.Sprintf("%x", h)
 }
 
-// ChunkFingerprint computes a SHA-256 hex fingerprint for a single chunk.
-func ChunkFingerprint(text string) string {
-	return Fingerprint(text)
-}
-
 func chunkID(docID string, index int) string {
 	h := sha256.Sum256([]byte(docID + strconv.Itoa(index)))
 	return fmt.Sprintf("%x", h[:16])

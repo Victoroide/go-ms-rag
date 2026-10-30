@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path"
@@ -41,7 +41,7 @@ func New(ctx context.Context, cfg *config.Config) (*Client, error) {
 		return nil, fmt.Errorf("s3: load aws config: %w", err)
 	}
 
-	log.Printf("s3: initialized (bucket=%s, region=%s)", cfg.S3Bucket, cfg.AWSRegion)
+	slog.InfoContext(ctx, "s3 initialized", "bucket", cfg.S3Bucket, "region", cfg.AWSRegion)
 	return newClient(awsCfg, cfg.S3Bucket, cfg.S3ExpectedBucketOwner), nil
 }
 
@@ -83,7 +83,7 @@ func (c *Client) Upload(
 	if err != nil {
 		return "", fmt.Errorf("s3: upload %s: %w", key, err)
 	}
-	log.Printf("s3: uploaded %s (%s)", key, contentType)
+	slog.DebugContext(ctx, "s3 object uploaded", "key", key, "content_type", contentType)
 	return key, nil
 }
 
@@ -116,7 +116,7 @@ func (c *Client) Delete(ctx context.Context, s3Key string) error {
 	if err != nil {
 		return fmt.Errorf("s3: delete %s: %w", s3Key, err)
 	}
-	log.Printf("s3: deleted %s", s3Key)
+	slog.DebugContext(ctx, "s3 object deleted", "key", s3Key)
 	return nil
 }
 

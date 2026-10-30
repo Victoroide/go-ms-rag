@@ -71,11 +71,6 @@ func (e *BedrockEmbedder) Embed(ctx context.Context, text string) ([]float32, er
 	return e.embedSingle(ctx, text)
 }
 
-// Runtime returns the underlying Bedrock runtime client.
-func (e *BedrockEmbedder) Runtime() *bedrockruntime.Client {
-	return e.rt
-}
-
 func (e *BedrockEmbedder) embedSingle(ctx context.Context, text string) ([]float32, error) {
 	payload, err := json.Marshal(titanEmbedRequest{
 		InputText:  text,

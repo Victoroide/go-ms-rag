@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"log"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -56,7 +55,7 @@ func hasMultiNeedSignal(query string) bool { return multiNeedPattern.MatchString
 // Run sets the sub-query count from surface cues without external calls.
 func (s *DecomposeStage) Run(ctx context.Context, qc *QueryContext) error {
 	digest := sha256.Sum256([]byte(qc.OriginalQuery))
-	slog.InfoContext(ctx, "decompose_stage", "query_bytes", len(qc.OriginalQuery), "query_digest", fmt.Sprintf("%x", digest[:6]))
+	slog.DebugContext(ctx, "decompose_stage", "query_bytes", len(qc.OriginalQuery), "query_digest", fmt.Sprintf("%x", digest[:6]))
 	if hasMultiNeedSignal(qc.OriginalQuery) {
 		qc.SubQueries = []string{qc.OriginalQuery, qc.OriginalQuery}
 	} else {
@@ -423,23 +422,6 @@ func (s *SynthesisStage) Run(ctx context.Context, qc *QueryContext) error {
 		qc.TokenUsage.TotalTokens = qc.TokenUsage.InputTokens + qc.TokenUsage.OutputTokens
 	}
 
-	log.Printf("synthesis_stage: mode=%s chunks=%d answer_len=%d", qc.RetrievalMode, len(qc.RetrievedChunks), len(qc.FinalAnswer))
+	slog.DebugContext(ctx, "synthesis completed", "mode", qc.RetrievalMode, "chunks", len(qc.RetrievedChunks), "answer_bytes", len(qc.FinalAnswer))
 	return nil
-}
-
-// BuildQueryMessages creates a single context+query message for direct Converse.
-func BuildQueryMessages(query string, chunks []domain.ScoredChunk) []brtypes.Message {
-	var contextBlock strings.Builder
-	for i, sc := range chunks {
-		fmt.Fprintf(&contextBlock, "--- Chunk %d (score: %.4f) ---\n%s\n\n", i+1, sc.Score, sc.Chunk.Text)
-	}
-	prompt := fmt.Sprintf("Context:\n%s\nQuery: %s\nAnswer based on the context.", contextBlock.String(), query)
-	return []brtypes.Message{
-		{
-			Role: brtypes.ConversationRoleUser,
-			Content: []brtypes.ContentBlock{
-				&brtypes.ContentBlockMemberText{Value: prompt},
-			},
-		},
-	}
 }

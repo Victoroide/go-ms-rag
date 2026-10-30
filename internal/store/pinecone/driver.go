@@ -31,11 +31,6 @@ func (d *Driver) QueryAllNamespaces(ctx context.Context, embedding []float32, to
 	return d.client.QueryAllNamespaces(ctx, embedding, topK, docTypeFilter)
 }
 
-// Delete removes vectors by ID from the specified namespace.
-func (d *Driver) Delete(ctx context.Context, namespace string, ids []string) error {
-	return d.client.Delete(ctx, namespace, ids)
-}
-
 // DeleteAllVectorsInNamespace deletes all vectors from the specified namespace.
 func (d *Driver) DeleteAllVectorsInNamespace(ctx context.Context, namespace string) error {
 	return d.client.DeleteAllVectorsInNamespace(ctx, namespace)

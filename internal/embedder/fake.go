@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"log"
+	"log/slog"
 	"math"
 )
 
@@ -30,7 +30,7 @@ func NewFakeEmbedder(dimensions int) *FakeEmbedder {
 
 // Embed returns a deterministic unit vector for text. Satisfies
 // domain.EmbeddingProvider.
-func (e *FakeEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+func (e *FakeEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	vec := make([]float32, e.dimensions)
 
 	// Seed a SplitMix64 PRNG from the text digest: fully deterministic and
@@ -64,6 +64,6 @@ func (e *FakeEmbedder) Embed(_ context.Context, text string) ([]float32, error) 
 			vec[i] *= inv
 		}
 	}
-	log.Printf("fake_embedder: generated %d-dim deterministic embedding for %d chars", e.dimensions, len(text))
+	slog.DebugContext(ctx, "offline embedding generated", "dimensions", e.dimensions, "text_bytes", len(text))
 	return vec, nil
 }

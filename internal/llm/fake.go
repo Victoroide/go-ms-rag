@@ -3,7 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"strings"
 
@@ -15,8 +15,7 @@ import (
 // FakeConverser is an offline ModelConverser for GO_RAG_FAKE_MODE. It returns a
 // deterministic, grounded answer assembled from the context the synthesis stage
 // already packed into the user message, with no Bedrock calls. It implements the
-// full Converser + ModelConverser surface (plus Ping) so the Ambassador's
-// routing/retry path works unchanged via SetClient. For local/offline QA only.
+// Converser and ModelConverser interfaces for offline execution.
 type FakeConverser struct{}
 
 // NewFakeConverser creates the offline converser.
@@ -27,18 +26,10 @@ func (f *FakeConverser) Converse(_ context.Context, messages []brtypes.Message) 
 	return f.synthesize(messages), nil
 }
 
-// ConverseWithModel satisfies ModelConverser.
-func (f *FakeConverser) ConverseWithModel(_ context.Context, _ string, messages []brtypes.Message, _ float32, _ int) (*bedrockruntime.ConverseOutput, error) {
-	return f.synthesize(messages), nil
-}
-
 // ConverseWithModelAndSystem satisfies ModelConverser.
 func (f *FakeConverser) ConverseWithModelAndSystem(_ context.Context, _, _ string, messages []brtypes.Message, _ float32, _ int) (*bedrockruntime.ConverseOutput, error) {
 	return f.synthesize(messages), nil
 }
-
-// Ping satisfies the optional Pinger interface used by Ambassador.Ping.
-func (f *FakeConverser) Ping(_ context.Context) error { return nil }
 
 func (f *FakeConverser) synthesize(messages []brtypes.Message) *bedrockruntime.ConverseOutput {
 	var user strings.Builder
@@ -57,7 +48,7 @@ func (f *FakeConverser) synthesize(messages []brtypes.Message) *bedrockruntime.C
 	)
 	in := fakeTokenCount(prompt)
 	out := fakeTokenCount(answer)
-	log.Printf("fake_llm: deterministic synthesis (%d chars)", len(answer))
+	slog.Debug("offline synthesis completed", "answer_bytes", len(answer))
 
 	return &bedrockruntime.ConverseOutput{
 		Output: &brtypes.ConverseOutputMemberMessage{

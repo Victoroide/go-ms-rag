@@ -14,7 +14,6 @@ type VectorStore interface {
 	Upsert(ctx context.Context, namespace string, chunks []Chunk) error
 	Query(ctx context.Context, namespace string, embedding []float32, topK int, docTypeFilter string) ([]ScoredChunk, error)
 	QueryAllNamespaces(ctx context.Context, embedding []float32, topK int, docTypeFilter string) ([]ScoredChunk, error)
-	Delete(ctx context.Context, namespace string, ids []string) error
 	Ping(ctx context.Context) error
 }
 

@@ -9,7 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"maps"
 	"math"
 	"slices"
@@ -20,7 +20,7 @@ import (
 )
 
 // FakeVectorStore is a thread-safe in-memory vector store. It implements
-// domain.VectorStore (Upsert, Query, QueryAllNamespaces, Delete, Ping) plus
+// domain.VectorStore (Upsert, Query, QueryAllNamespaces, Ping) plus
 // the domain.VectorDeleter methods (DeleteAllVectorsInNamespace, DeleteByDocID)
 // used by the delete handler.
 type FakeVectorStore struct {
@@ -36,7 +36,7 @@ func NewFakeVectorStore() *FakeVectorStore {
 }
 
 // Upsert inserts or replaces chunk vectors in the namespace.
-func (s *FakeVectorStore) Upsert(_ context.Context, namespace string, chunks []domain.Chunk) error {
+func (s *FakeVectorStore) Upsert(ctx context.Context, namespace string, chunks []domain.Chunk) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	dimensions := s.dimensions
@@ -76,7 +76,7 @@ func (s *FakeVectorStore) Upsert(_ context.Context, namespace string, chunks []d
 		m[string(c.ID)] = cp
 		stored++
 	}
-	log.Printf("fake_vectorstore: upserted %d vectors to namespace %q (total ns=%d)", stored, namespace, len(s.ns))
+	slog.DebugContext(ctx, "offline vectors upserted", "vectors", stored, "namespace", namespace, "namespaces", len(s.ns))
 	return nil
 }
 
@@ -207,18 +207,6 @@ func (s *FakeVectorStore) query(namespace string, embedding []float32, topK int,
 		scored = scored[:topK]
 	}
 	return scored
-}
-
-// Delete removes vectors by ID from the namespace.
-func (s *FakeVectorStore) Delete(_ context.Context, namespace string, ids []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if m, ok := s.ns[namespace]; ok {
-		for _, id := range ids {
-			delete(m, id)
-		}
-	}
-	return nil
 }
 
 // DeleteAllVectorsInNamespace drops an entire namespace (per-doc UUID namespace).

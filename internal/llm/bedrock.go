@@ -25,7 +25,6 @@ type Converser interface {
 // ModelConverser extends Converser with per-call model selection.
 type ModelConverser interface {
 	Converser
-	ConverseWithModel(ctx context.Context, modelID string, messages []brtypes.Message, temperature float32, maxTokens int) (*bedrockruntime.ConverseOutput, error)
 	ConverseWithModelAndSystem(ctx context.Context, modelID, systemPrompt string, messages []brtypes.Message, temperature float32, maxTokens int) (*bedrockruntime.ConverseOutput, error)
 }
 
@@ -71,16 +70,7 @@ func (c *Client) Converse(ctx context.Context, messages []brtypes.Message) (*bed
 	return output, nil
 }
 
-// ConverseWithModel sends a synchronous Converse API call to the specified model.
-func (c *Client) ConverseWithModel(ctx context.Context, modelID string, messages []brtypes.Message, temperature float32, maxTokens int) (*bedrockruntime.ConverseOutput, error) {
-	return c.ConverseWithModelAndSystem(ctx, modelID, "", messages, temperature, maxTokens)
-}
-
-// ConverseWithModelAndSystem is like ConverseWithModel but also accepts a
-// system prompt routed through the Converse API's dedicated System field.
-// This is the reliable way to enforce hard rules (language, format) across
-// providers without polluting the user message and is far stronger than an
-// in-prompt instruction at the bottom of a long context.
+// ConverseWithModelAndSystem sends a request with per-call settings and a system prompt.
 func (c *Client) ConverseWithModelAndSystem(ctx context.Context, modelID, systemPrompt string, messages []brtypes.Message, temperature float32, maxTokens int) (*bedrockruntime.ConverseOutput, error) {
 	topP := extractionTopP
 	var maxToks int32
@@ -112,21 +102,6 @@ func (c *Client) ConverseWithModelAndSystem(ctx context.Context, modelID, system
 		return nil, fmt.Errorf("llm: converse (model=%s): %w", modelID, err)
 	}
 	return output, nil
-}
-
-// Ping verifies connectivity to the AWS Bedrock service.
-func (c *Client) Ping(ctx context.Context) error {
-	_, err := c.rt.Converse(ctx, &bedrockruntime.ConverseInput{
-		ModelId:  aws.String(c.modelID),
-		Messages: []brtypes.Message{},
-	})
-	if err != nil {
-		if strings.Contains(err.Error(), "ValidationException") {
-			return nil
-		}
-		return fmt.Errorf("llm: ping: %w", err)
-	}
-	return nil
 }
 
 // ExtractText pulls text from a ConverseOutput.
