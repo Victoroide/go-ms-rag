@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Victoroide/quarry-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/metrics"
 )
 
 // StageID identifies a pipeline stage.
@@ -114,7 +115,9 @@ func RunIngestionPipeline(ctx context.Context, ic *IngestContext, stages []Stage
 		if err := ctx.Err(); err != nil {
 			return results, fmt.Errorf("pipeline: context canceled before stage %s: %w", s.ID(), err)
 		}
+		start := time.Now()
 		err := s.Run(ctx, ic)
+		metrics.FromContext(ctx).StageDuration.WithLabelValues(string(s.ID())).Observe(time.Since(start).Seconds())
 		results = append(results, StageResult{StageID: s.ID(), Err: err})
 		if err != nil {
 			return results, fmt.Errorf("pipeline: stage %s failed: %w", s.ID(), err)
@@ -127,6 +130,12 @@ func RunIngestionPipeline(ctx context.Context, ic *IngestContext, stages []Stage
 // on the first error. Records per-stage wall-clock time into
 // qc.StageTimingsMS so callers can attribute tail-latency costs.
 func RunRetrievalPipeline(ctx context.Context, qc *QueryContext, stages []QueryStage) ([]StageResult, error) {
+	defer func() {
+		switch qc.RetrievalMode {
+		case "LOCAL", "GLOBAL":
+			metrics.FromContext(ctx).QueryMode.WithLabelValues(qc.RetrievalMode).Inc()
+		}
+	}()
 	if qc.StageTimingsMS == nil {
 		qc.StageTimingsMS = make(map[string]int64, len(stages))
 	}
@@ -137,7 +146,9 @@ func RunRetrievalPipeline(ctx context.Context, qc *QueryContext, stages []QueryS
 		}
 		t0 := time.Now()
 		err := s.Run(ctx, qc)
-		qc.StageTimingsMS[string(s.ID())] = time.Since(t0).Milliseconds()
+		elapsed := time.Since(t0)
+		qc.StageTimingsMS[string(s.ID())] = elapsed.Milliseconds()
+		metrics.FromContext(ctx).StageDuration.WithLabelValues(string(s.ID())).Observe(elapsed.Seconds())
 		results = append(results, StageResult{StageID: s.ID(), Err: err})
 		if err != nil {
 			return results, fmt.Errorf("pipeline: stage %s failed: %w", s.ID(), err)

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/Victoroide/quarry-rag/internal/embedder"
 	"github.com/Victoroide/quarry-rag/internal/llm"
 	"github.com/Victoroide/quarry-rag/internal/logctx"
+	"github.com/Victoroide/quarry-rag/internal/metrics"
 	"github.com/Victoroide/quarry-rag/internal/pipeline"
 	"github.com/Victoroide/quarry-rag/internal/retriever"
 	memstore "github.com/Victoroide/quarry-rag/internal/store/memory"
@@ -144,12 +146,22 @@ func run() error {
 		pipeline.NewPersistStage(vectorStore),
 	}
 
+	serviceMetrics := metrics.NewService(metrics.CachedGauge(10*time.Second, func() (float64, error) {
+		gaugeCtx, gaugeCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer gaugeCancel()
+		count, countErr := pgClient.PendingIngestJobs(gaugeCtx)
+		if countErr != nil {
+			slog.ErrorContext(gaugeCtx, "count pending ingestion jobs", "error", countErr)
+		}
+		return float64(count), countErr
+	}))
+
 	// Initialize worker.
 	hostname, err := os.Hostname()
 	if err != nil {
 		return fmt.Errorf("startup: hostname: %w", err)
 	}
-	w := worker.New(pgClient, ingestStages, vecDeleter, worker.Options{Workers: cfg.IngestWorkers, MaxAttempts: cfg.IngestMaxAttempts, Lease: cfg.IngestLease, JobTimeout: cfg.IngestJobTimeout, PollInterval: cfg.IngestPollInterval, Owner: hostname + "-" + uuid.NewString()})
+	w := worker.New(pgClient, ingestStages, vecDeleter, worker.Options{Metrics: serviceMetrics, Workers: cfg.IngestWorkers, MaxAttempts: cfg.IngestMaxAttempts, Lease: cfg.IngestLease, JobTimeout: cfg.IngestJobTimeout, PollInterval: cfg.IngestPollInterval, Owner: hostname + "-" + uuid.NewString()})
 	w.Start(ctx)
 	defer func() {
 		shutdownCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
@@ -172,6 +184,7 @@ func run() error {
 		PineconeDriver: vecDeleter,
 		PGPool:         pgClient.Pool,
 		Probes:         probes,
+		Metrics:        serviceMetrics,
 	})
 
 	srv := &http.Server{
@@ -189,19 +202,50 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("server: listen: %w", err)
 	}
+	var additional []httpEndpoint
+	if cfg.MetricsAddr != "" {
+		metricsSrv := metricsServer(cfg.MetricsAddr, serviceMetrics.Registry)
+		metricsListener, listenErr := (&net.ListenConfig{}).Listen(signalCtx, "tcp", metricsSrv.Addr)
+		if listenErr != nil {
+			return errors.Join(fmt.Errorf("metrics: listen: %w", listenErr), listener.Close())
+		}
+		additional = append(additional, httpEndpoint{metricsSrv, metricsListener})
+		logger.Info("starting metrics server", "address", metricsSrv.Addr)
+	}
 	logger.Info("starting server", "address", srv.Addr)
-	return serve(signalCtx, srv, listener, probes, cfg.ShutdownDrainDelay)
+	return serve(signalCtx, srv, listener, probes, cfg.ShutdownDrainDelay, additional...)
 }
 
-func serve(ctx context.Context, srv *http.Server, listener net.Listener, probes *handler.Probes, drain time.Duration) error {
-	result := make(chan error, 1)
-	go func() { result <- srv.Serve(listener) }()
-	select {
-	case err := <-result:
-		if !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("server: %w", err)
+type httpEndpoint struct {
+	server   *http.Server
+	listener net.Listener
+}
+
+func metricsServer(addr string, registry *metrics.Registry) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		if err := registry.WriteText(w); err != nil {
+			slog.ErrorContext(r.Context(), "write metrics", "error", err)
 		}
-		return nil
+	})
+	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: time.Minute}
+}
+
+func serve(ctx context.Context, srv *http.Server, listener net.Listener, probes *handler.Probes, drain time.Duration, additional ...httpEndpoint) error {
+	endpoints := append([]httpEndpoint{{srv, listener}}, additional...)
+	results := make(chan error, len(endpoints))
+	for _, endpoint := range endpoints {
+		go func() { results <- endpoint.server.Serve(endpoint.listener) }()
+	}
+	remaining := len(endpoints)
+	var result error
+	select {
+	case err := <-results:
+		remaining--
+		if !errors.Is(err, http.ErrServerClosed) {
+			result = fmt.Errorf("server: %w", err)
+		}
 	case <-ctx.Done():
 		secondSignal := make(chan os.Signal, 1)
 		signal.Notify(secondSignal, syscall.SIGINT, syscall.SIGTERM)
@@ -213,20 +257,27 @@ func serve(ctx context.Context, srv *http.Server, listener net.Listener, probes 
 		case <-timer.C:
 		case <-secondSignal:
 		}
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			closeErr := srv.Close()
-			serveErr := <-result
-			if !errors.Is(serveErr, http.ErrServerClosed) {
-				closeErr = errors.Join(closeErr, serveErr)
-			}
-			return errors.Join(fmt.Errorf("server shutdown: %w", err), closeErr)
-		}
-		err := <-result
-		if !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("server: %w", err)
-		}
-		return nil
 	}
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	shutdownErrors := make(chan error, len(endpoints))
+	var wg sync.WaitGroup
+	for _, endpoint := range endpoints {
+		wg.Go(func() {
+			if err := endpoint.server.Shutdown(shutdownCtx); err != nil {
+				shutdownErrors <- errors.Join(fmt.Errorf("server shutdown: %w", err), endpoint.server.Close())
+			}
+		})
+	}
+	wg.Wait()
+	close(shutdownErrors)
+	for err := range shutdownErrors {
+		result = errors.Join(result, err)
+	}
+	for range remaining {
+		if err := <-results; !errors.Is(err, http.ErrServerClosed) {
+			result = errors.Join(result, fmt.Errorf("server: %w", err))
+		}
+	}
+	return result
 }
