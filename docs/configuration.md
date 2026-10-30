@@ -18,6 +18,9 @@ The table below lists every environment variable parsed by the service:
 | `PINECONE_API_KEY` | string | `""` | Non-empty string | API key for authenticating with Pinecone vector indices. Required when `GO_RAG_FAKE_MODE=false`. |
 | `PINECONE_INDEX_NAME` | string | `"go-ms-rag"` | Non-empty string | Name of the target Pinecone index. |
 | `PINECONE_ENVIRONMENT` | string | `""` | String | Pinecone cloud environment identifier. |
+| `PINECONE_UPSERT_BATCH_SIZE` | integer | `100` | 1 to 1000 | Maximum records per vector upsert; each batch also has a 1.5 MiB estimated size limit. |
+| `PINECONE_TIMEOUT` | duration | `10s` | 1s to 2m | Timeout for each vector index request attempt. |
+| `PINECONE_MAX_ATTEMPTS` | integer | `5` | 1 to 10 | Maximum vector write and deletion attempts, including the first attempt; queries use at most three attempts. |
 | `DATABASE_URL` | string | `""` | Valid PostgreSQL connection string | PostgreSQL connection string for document metadata and chunk storage. Always required in all modes. Defaults to 16 pooled connections and a 30-second statement timeout; override with `pool_max_conns` and `statement_timeout`. |
 | `WORKER_QUEUE_SIZE` | integer | `100` | 1 to 1000 | In-memory buffered channel capacity for the background ingestion worker. |
 | `EMBED_CONCURRENCY` | integer | `10` | 1 to 50 | Maximum number of concurrent embedding requests dispatched to AWS Bedrock. |

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds all operational parameters for the service.
@@ -54,6 +55,10 @@ type Config struct {
 	ServiceToken string
 
 	S3ExpectedBucketOwner string
+
+	PineconeUpsertBatchSize int
+	PineconeTimeout         time.Duration
+	PineconeMaxAttempts     int
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -84,6 +89,8 @@ func Load() (*Config, error) {
 		{"WORKER_QUEUE_SIZE", &cfg.WorkerQueueSize, 100}, {"EMBED_CONCURRENCY", &cfg.EmbedConcurrency, 10},
 		{"MAX_CHUNKS_PER_QUERY", &cfg.MaxChunksPerQuery, 10}, {"CHUNK_TOKEN_SIZE", &cfg.ChunkTokenSize, 512},
 		{"CHUNK_OVERLAP", &cfg.ChunkOverlap, 64}, {"EMBEDDING_DIMENSIONS", &cfg.EmbeddingDimensions, 1024},
+		{"PINECONE_UPSERT_BATCH_SIZE", &cfg.PineconeUpsertBatchSize, 100},
+		{"PINECONE_MAX_ATTEMPTS", &cfg.PineconeMaxAttempts, 5},
 	} {
 		value, err := envIntOrDefault(setting.key, setting.fallback)
 		if err != nil {
@@ -92,6 +99,9 @@ func Load() (*Config, error) {
 		*setting.dst = value
 	}
 	var err error
+	if cfg.PineconeTimeout, err = envDurationOrDefault("PINECONE_TIMEOUT", 10*time.Second); err != nil {
+		return nil, err
+	}
 	if cfg.LocalRetrievalThreshold, err = envFloat64OrDefault("LOCAL_RETRIEVAL_THRESHOLD", 0.70); err != nil {
 		return nil, err
 	}
@@ -163,6 +173,15 @@ func (c *Config) validate() error {
 	if c.EmbeddingDimensions != 256 && c.EmbeddingDimensions != 512 && c.EmbeddingDimensions != 1024 {
 		return fmt.Errorf("config: EMBEDDING_DIMENSIONS must be 256, 512 or 1024")
 	}
+	if c.PineconeUpsertBatchSize < 1 || c.PineconeUpsertBatchSize > 1000 {
+		return fmt.Errorf("config: PINECONE_UPSERT_BATCH_SIZE must be between 1 and 1000")
+	}
+	if c.PineconeTimeout < time.Second || c.PineconeTimeout > 2*time.Minute {
+		return fmt.Errorf("config: PINECONE_TIMEOUT must be between 1s and 2m")
+	}
+	if c.PineconeMaxAttempts < 1 || c.PineconeMaxAttempts > 10 {
+		return fmt.Errorf("config: PINECONE_MAX_ATTEMPTS must be between 1 and 10")
+	}
 	switch c.SynthesisModel {
 	case "primary", "fallback", "hybrid":
 	default:
@@ -220,4 +239,8 @@ func envInt64OrDefault(key string, fallback int64) (int64, error) {
 }
 func envFloat64OrDefault(key string, fallback float64) (float64, error) {
 	return parseEnv(key, fallback, func(value string) (float64, error) { return strconv.ParseFloat(value, 64) })
+}
+
+func envDurationOrDefault(key string, fallback time.Duration) (time.Duration, error) {
+	return parseEnv(key, fallback, time.ParseDuration)
 }

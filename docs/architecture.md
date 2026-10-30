@@ -64,7 +64,7 @@ flowchart TD
   - **Ingestion Pipeline**: Executes `ChunkStage`, `EmbedStage`, and `PersistStage`.
   - **Query Pipeline**: Executes `DecomposeStage`, `RoutingStage`, `RetrievalStage`, and `SynthesisStage`.
 - **`internal/store/postgres`**: Manages PostgreSQL connection pooling via `pgxpool`, applies embedded SQL migrations, and performs transactional CRUD queries on documents, chunks, and fingerprints.
-- **`internal/store/pinecone`**: Implements vector storage drivers for Pinecone, managing index connection pooling across namespaces, upsert operations, and metadata filtering.
+- **`internal/store/pinecone`**: Implements vector storage drivers for Pinecone, reusing one default-namespace connection and closing other namespace connections after each operation, with batched writes, retries, and metadata filtering.
 - **`internal/store/s3`**: Uploads source binaries, deletes stored objects, and generates presigned GET download URLs.
 - **`internal/cleanup`**: Provides multi-store deletion ensuring external vector and object records are purged before metadata records are removed.
 - **`internal/domain`**: Defines shared interfaces, domain data models, and the default document label constant (`DefaultDocType = "document"`).
@@ -140,6 +140,8 @@ sequenceDiagram
    - Assigns the caller's `doc_type` or falls back to the default `"document"`.
    - Injects `doc_type` into metadata for both document and individual chunk records.
    - Upserts vectors into Pinecone only under the default namespace (`""`), with `doc_id` metadata identifying each document.
+   - Splits each vector upsert into batches of at most `PINECONE_UPSERT_BATCH_SIZE` records (default 100) and 1.5 MiB of estimated encoded data. Metadata above 40,960 serialized JSON bytes per record is rejected before writing.
+   - Retries transient vector index failures with a per-attempt `PINECONE_TIMEOUT` and full-jitter exponential backoff from 200 ms, capped at 5 seconds. Writes and deletions use up to `PINECONE_MAX_ATTEMPTS` attempts; queries use at most three. Parent cancellation stops retries.
    - Inserts the document record into PostgreSQL, storing the full text, metadata, and an initial 120-rune text preview.
    - Inserts chunk metadata records into PostgreSQL inside a database transaction.
    - Records the SHA-256 content fingerprint in PostgreSQL.

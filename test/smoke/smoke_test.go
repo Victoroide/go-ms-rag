@@ -22,6 +22,9 @@ import (
 
 	"github.com/Victoroide/quarry-rag/internal/cleanup"
 	"github.com/Victoroide/quarry-rag/internal/config"
+	"github.com/google/uuid"
+	"github.com/pinecone-io/go-pinecone/pinecone"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const baseURL = "http://localhost:8081"
@@ -121,7 +124,7 @@ func TestSmoke_IngestDOCXFile(t *testing.T) {
 	docID := result["document_id"]
 	t.Logf("ingested doc: %s, status: %s", docID, result["status"])
 
-	registerDocumentCleanup(t, docID)
+	registerDocumentCleanup(t.Context(), t, docID)
 
 	// Wait for worker to process.
 	time.Sleep(5 * time.Second)
@@ -192,7 +195,7 @@ func TestSmoke_LargeFileUpload(t *testing.T) {
 		if result["document_id"] == "" {
 			t.Fatal("missing document_id")
 		}
-		registerDocumentCleanup(t, result["document_id"])
+		registerDocumentCleanup(t.Context(), t, result["document_id"])
 	}
 
 }
@@ -222,7 +225,7 @@ func TestSmoke_JSONIngestStillWorks(t *testing.T) {
 			if docID := result["document_id"]; docID != "" {
 				t.Logf("ingested JSON doc: %s", docID)
 
-				registerDocumentCleanup(t, docID)
+				registerDocumentCleanup(t.Context(), t, docID)
 			}
 		}
 	}
@@ -240,10 +243,14 @@ func request(ctx context.Context, method, url, contentType string, body io.Reade
 	return (&http.Client{Timeout: 120 * time.Second}).Do(req)
 }
 
-func registerDocumentCleanup(t *testing.T, docID string) {
+func registerDocumentCleanup(parent context.Context, t *testing.T, docID string) func() {
 	t.Helper()
+	needed := true
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		if !needed {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 60*time.Second)
 		defer cancel()
 		cfg, err := config.Load()
 		if err != nil {
@@ -264,6 +271,7 @@ func registerDocumentCleanup(t *testing.T, docID string) {
 			t.Errorf("delete document %s: %v", docID, err)
 		}
 	})
+	return func() { needed = false }
 }
 
 func deleteWhenPresent(ctx context.Context, deleteDocument func() error) error {
@@ -298,5 +306,170 @@ func TestDeferredDeletionWaitsForIngestion(t *testing.T) {
 	cancel()
 	if err := deleteWhenPresent(ctx, func() error { return cleanup.ErrDocumentNotFound }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected bounded cancellation: %v", err)
+	}
+}
+
+func TestSmoke_LargeDocumentIsIndexed(t *testing.T) {
+	skipUnlessSmoke(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	defer cancel()
+	index, dims := vectorSmokeIndex(ctx, t)
+	var content strings.Builder
+	marker := uuid.NewString()
+	for i := 0; content.Len() < 900000; i++ {
+		fmt.Fprintf(&content, "Record %06d in collection %s describes archive retention, storage locations, reference numbers and document retrieval procedures.\n\n", i, marker)
+	}
+	docID, _ := ingestVectorSmoke(ctx, t, content.String()[:900000])
+	waitVectorSmoke(ctx, t, func() (bool, error) {
+		present, err := vectorSmokeHasDocument(ctx, index, dims, docID)
+		if err != nil || !present {
+			return false, err
+		}
+		return vectorSmokeDocumentStored(ctx, docID)
+	})
+}
+
+func TestSmoke_DeleteRemovesVectors(t *testing.T) {
+	skipUnlessSmoke(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	defer cancel()
+	index, dims := vectorSmokeIndex(ctx, t)
+	docID, cancelCleanup := ingestVectorSmoke(ctx, t, "Archive deletion verification for collection "+uuid.NewString()+". Records contain storage references and retention procedures for document retrieval.")
+	waitVectorSmoke(ctx, t, func() (bool, error) {
+		present, err := vectorSmokeHasDocument(ctx, index, dims, docID)
+		if err != nil || !present {
+			return false, err
+		}
+		return vectorSmokeDocumentStored(ctx, docID)
+	})
+	resp, err := request(ctx, http.MethodDelete, baseURL+"/documents/"+docID, "", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete returned %d", resp.StatusCode)
+	}
+	cancelCleanup()
+	deletionCtx, deletionCancel := context.WithTimeout(ctx, 60*time.Second)
+	defer deletionCancel()
+	waitVectorSmoke(deletionCtx, t, func() (bool, error) {
+		present, queryErr := vectorSmokeHasDocument(deletionCtx, index, dims, docID)
+		return !present, queryErr
+	})
+}
+
+func vectorSmokeIndex(ctx context.Context, t *testing.T) (index *pinecone.IndexConnection, dims int) {
+	t.Helper()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FakeMode {
+		t.Fatal("live vector checks require GO_RAG_FAKE_MODE=false")
+	}
+	client, err := pinecone.NewClient(pinecone.NewClientParams{ApiKey: cfg.PineconeAPIKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx, err := client.DescribeIndex(ctx, cfg.PineconeIndexName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := client.Index(pinecone.NewIndexConnParams{Host: idx.Host})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close vector connection: %v", closeErr)
+		}
+	})
+	return conn, cfg.EmbeddingDimensions
+}
+
+func ingestVectorSmoke(ctx context.Context, t *testing.T, content string) (docID string, cancelCleanup func()) {
+	t.Helper()
+	payload, err := json.Marshal(map[string]string{"document_id": uuid.NewString(), "content": content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := request(ctx, http.MethodPost, baseURL+"/ingest", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("ingest returned %d", resp.StatusCode)
+	}
+	var result struct {
+		DocumentID string `json:"document_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.DocumentID == "" {
+		t.Fatal("missing document_id")
+	}
+	cancelCleanup = registerDocumentCleanup(ctx, t, result.DocumentID)
+	return result.DocumentID, cancelCleanup
+}
+
+func vectorSmokeHasDocument(ctx context.Context, conn *pinecone.IndexConnection, dims int, docID string) (bool, error) {
+	vector := make([]float32, dims)
+	vector[0] = 1
+	filter, err := structpb.NewStruct(map[string]any{"doc_id": map[string]any{"$eq": docID}})
+	if err != nil {
+		return false, err
+	}
+	res, err := conn.QueryByVectorValues(ctx, &pinecone.QueryByVectorValuesRequest{Vector: vector, TopK: 1, MetadataFilter: filter})
+	if err != nil {
+		return false, err
+	}
+	return len(res.Matches) > 0, nil
+}
+
+func vectorSmokeDocumentStored(ctx context.Context, docID string) (bool, error) {
+	resp, err := request(ctx, http.MethodGet, baseURL+"/documents", "", http.NoBody)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("document listing returned %d", resp.StatusCode)
+	}
+	var result struct {
+		Documents []struct {
+			ID string `json:"document_id"`
+		} `json:"documents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, err
+	}
+	for _, doc := range result.Documents {
+		if doc.ID == docID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func waitVectorSmoke(ctx context.Context, t *testing.T, ready func() (bool, error)) {
+	t.Helper()
+	for {
+		ok, err := ready()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok {
+			return
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			t.Fatalf("vector check did not complete: %v", ctx.Err())
+		case <-timer.C:
+		}
 	}
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // baseValidConfig returns a Config that passes validate() in real (non-fake)
@@ -10,15 +11,18 @@ import (
 func baseValidConfig() *Config {
 	return &Config{
 		ServerPort: "8081", ChunkTokenSize: 512, ChunkOverlap: 64, LocalRetrievalThreshold: 0.7, MaxChunksPerQuery: 10, MaxUploadBytes: 20 << 20, EmbeddingDimensions: 1024, SynthesisModel: "fallback",
-		DatabaseURL:      "postgres://localhost:5432/db?sslmode=disable",
-		AWSRegion:        "us-east-1",
-		AWSAccessKeyID:   "AKIA_TEST",
-		AWSSecretKey:     "secret_test",
-		PineconeAPIKey:   "pc_test",
-		WorkerQueueSize:  100,
-		EmbedConcurrency: 10,
-		ServiceToken:     "a-strong-service-token",
-		FakeMode:         false,
+		DatabaseURL:             "postgres://localhost:5432/db?sslmode=disable",
+		AWSRegion:               "us-east-1",
+		AWSAccessKeyID:          "AKIA_TEST",
+		AWSSecretKey:            "secret_test",
+		PineconeAPIKey:          "pc_test",
+		WorkerQueueSize:         100,
+		EmbedConcurrency:        10,
+		ServiceToken:            "a-strong-service-token",
+		FakeMode:                false,
+		PineconeUpsertBatchSize: 100,
+		PineconeTimeout:         10 * time.Second,
+		PineconeMaxAttempts:     5,
 	}
 }
 
