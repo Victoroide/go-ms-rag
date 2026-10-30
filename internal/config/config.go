@@ -220,8 +220,8 @@ func (c *Config) validate() error {
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("config: SERVER_PORT must be between 1 and 65535")
 	}
-	if c.ChunkTokenSize < 1 || c.ChunkTokenSize > 8192 {
-		return fmt.Errorf("config: CHUNK_TOKEN_SIZE must be between 1 and 8192")
+	if c.ChunkTokenSize < 2 || c.ChunkTokenSize > 8192 {
+		return fmt.Errorf("config: CHUNK_TOKEN_SIZE must be between 2 and 8192")
 	}
 	if c.ChunkOverlap < 0 || c.ChunkOverlap >= c.ChunkTokenSize {
 		return fmt.Errorf("config: CHUNK_OVERLAP must be nonnegative and smaller than CHUNK_TOKEN_SIZE")
