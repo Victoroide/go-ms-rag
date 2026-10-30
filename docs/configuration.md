@@ -33,7 +33,7 @@ The table below lists every environment variable parsed by the service:
 | `EMBED_CONCURRENCY` | integer | `10` | 1 to 50 | Maximum number of concurrent embedding requests dispatched to AWS Bedrock. |
 | `EMBED_TIMEOUT` | duration | `15s` | 1s to 2m | Deadline for each embedding call, including waiting for a concurrency slot and all retries. An earlier caller deadline takes precedence. |
 | `LOCAL_RETRIEVAL_THRESHOLD` | float64 | `0.70` | 0.0 to 1.0 | Cosine similarity threshold for routing single-need queries to LOCAL retrieval mode. |
-| `MAX_CHUNKS_PER_QUERY` | integer | `10` | 1 to 100 | Default and maximum number of chunks returned by the retriever per query. |
+| `MAX_CHUNKS_PER_QUERY` | integer | `10` | 1 to 100 | Maximum chunks retrieved per query. Requests with omitted or zero `max_chunks` use this value; larger requests are capped at this value. |
 | `MAX_ALLOWED_DOCUMENT_IDS` | integer | `25000` | 1 to 100000 | Maximum allowlist entries per query before deduplication; the 1 MiB query body limit also applies. Vector queries split lists into groups of at most 10000 IDs and merge the top results. |
 | `REQUIRE_DOCUMENT_ALLOWLIST` | boolean | `false` | Boolean | Require a non-null `allowed_document_ids` field on every query; an empty list is accepted and skips embedding and search. |
 | `CHUNK_TOKEN_SIZE` | integer | `512` | 1 to 8192 | Approximate target token size per text chunk in the sliding window chunker. |
