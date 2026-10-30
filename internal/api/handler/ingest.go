@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -51,7 +52,12 @@ func validateIngestRequest(req *IngestRequest) *APIError {
 	if len(req.Content) > domain.MaxContentBytes {
 		return &APIError{Error: "validation", Message: "content exceeds maximum length of 1000000 bytes"}
 	}
-	return nil
+	var apiErr *APIError
+	req.DocType, apiErr = validateDocType(req.DocType)
+	if apiErr != nil {
+		return apiErr
+	}
+	return validateMetadata(req.Metadata)
 }
 
 // IngestHandler returns an HTTP handler for POST /ingest.
@@ -66,8 +72,8 @@ func IngestHandler(wk *worker.Worker, cs domain.ChunkStore, s3Client ObjectStore
 		opt(&options)
 	}
 	return func(rw http.ResponseWriter, r *http.Request) {
-		ct := r.Header.Get("Content-Type")
-		if strings.HasPrefix(ct, "multipart/form-data") {
+		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err == nil && mediaType == "multipart/form-data" {
 			handleFileIngest(rw, r, wk, cs, s3Client, maxUploadBytes, options)
 			return
 		}
@@ -86,10 +92,6 @@ func handleJSONIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 	}
 
 	req.Content = strings.ReplaceAll(req.Content, "\x00", "")
-	if metadataHasNUL(req.Metadata) || metadataHasNUL(req.DocType) {
-		writeJSONError(rw, http.StatusBadRequest, "validation", "metadata must not contain NUL characters")
-		return
-	}
 	if apiErr := validateIngestRequest(&req); apiErr != nil {
 		writeJSONError(rw, http.StatusBadRequest, apiErr.Error, apiErr.Message)
 		return
@@ -173,10 +175,6 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 	}
 
 	text = strings.ReplaceAll(text, "\x00", "")
-	if apiErr := validateIngestRequest(&IngestRequest{Content: text}); apiErr != nil {
-		writeJSONError(rw, http.StatusBadRequest, apiErr.Error, apiErr.Message)
-		return
-	}
 	suppliedID := r.FormValue("document_id")
 	docID, ok := ingestDocumentID(rw, suppliedID)
 	if !ok {
@@ -184,11 +182,24 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 	}
 	formDocType := r.FormValue("doc_type")
 	ftStr, fileName := string(ft), header.Filename
-	metadata := map[string]any{"source_file": fileName}
-	if metadataHasNUL(metadata) || metadataHasNUL(formDocType) {
-		writeJSONError(rw, http.StatusBadRequest, "validation", "metadata must not contain NUL characters")
+	metadata := make(map[string]any)
+	if values, present := r.MultipartForm.Value["metadata"]; present {
+		if len(values) != 1 || decodeJSONObject([]byte(values[0]), &metadata) != nil {
+			writeJSONError(rw, http.StatusBadRequest, "validation", "metadata must be a JSON object without duplicate keys or trailing data")
+			return
+		}
+		if apiErr := validateMetadata(metadata); apiErr != nil {
+			writeJSONError(rw, http.StatusBadRequest, apiErr.Error, apiErr.Message)
+			return
+		}
+	}
+	metadata["source_file"] = fileName
+	req := IngestRequest{Content: text, DocType: formDocType, Metadata: metadata}
+	if apiErr := validateIngestRequest(&req); apiErr != nil {
+		writeJSONError(rw, http.StatusBadRequest, apiErr.Error, apiErr.Message)
 		return
 	}
+	formDocType = req.DocType
 	var s3Key *string
 	if s3Client != nil {
 		existingID, exists, lookupErr := cs.CheckFingerprint(r.Context(), chunker.Fingerprint(text))

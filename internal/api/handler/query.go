@@ -71,7 +71,7 @@ func validateQueryRequest(req *QueryRequest) *APIError {
 		return &APIError{Error: "validation", Message: "query is required"}
 	}
 	if len(req.Query) > 10000 {
-		return &APIError{Error: "validation", Message: "query exceeds maximum length of 10000 characters"}
+		return &APIError{Error: "validation", Message: "query exceeds maximum length of 10000 bytes"}
 	}
 	switch strings.ToLower(req.Mode) {
 	case "", "auto", "local", "global":
@@ -81,7 +81,9 @@ func validateQueryRequest(req *QueryRequest) *APIError {
 	if req.MaxChunks < 0 || req.MaxChunks > 100 {
 		return &APIError{Error: "validation", Message: "max_chunks must be between 0 and 100"}
 	}
-	return nil
+	var apiErr *APIError
+	req.FilterDocType, apiErr = validateDocType(req.FilterDocType)
+	return apiErr
 }
 
 // QueryHandler returns an HTTP handler for POST /query.
@@ -109,7 +111,7 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 
 		qc := &pipeline.QueryContext{
 			OriginalQuery:      req.Query,
-			MaxChunks:          req.MaxChunks,
+			MaxChunks:          effectiveMaxChunks(req.MaxChunks, cfg.MaxChunksPerQuery),
 			RequestedMode:      req.Mode,
 			FilterDocType:      req.FilterDocType,
 			AllowedDocumentIDs: req.AllowedDocumentIDs,
