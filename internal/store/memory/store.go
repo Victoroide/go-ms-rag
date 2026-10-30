@@ -7,9 +7,12 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"maps"
 	"math"
+	"slices"
 	"sort"
 	"sync"
 
@@ -23,7 +26,8 @@ import (
 type FakeVectorStore struct {
 	mu sync.RWMutex
 	// namespace -> chunkID -> stored chunk (with embedding + metadata).
-	ns map[string]map[string]domain.Chunk
+	ns         map[string]map[string]domain.Chunk
+	dimensions int
 }
 
 // NewFakeVectorStore creates an empty in-memory store.
@@ -35,6 +39,25 @@ func NewFakeVectorStore() *FakeVectorStore {
 func (s *FakeVectorStore) Upsert(_ context.Context, namespace string, chunks []domain.Chunk) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	dimensions := s.dimensions
+	for _, c := range chunks {
+		if len(c.Embedding) == 0 {
+			continue
+		}
+		if len(c.ID) > 512 {
+			return fmt.Errorf("memory: chunk ID exceeds 512 bytes")
+		}
+		if err := validateMetadata(c); err != nil {
+			return err
+		}
+		if dimensions == 0 {
+			dimensions = len(c.Embedding)
+		}
+		if len(c.Embedding) != dimensions {
+			return fmt.Errorf("memory: embedding dimension %d does not match index dimension %d", len(c.Embedding), dimensions)
+		}
+	}
+	s.dimensions = dimensions
 	m, ok := s.ns[namespace]
 	if !ok {
 		m = make(map[string]domain.Chunk)
@@ -49,12 +72,70 @@ func (s *FakeVectorStore) Upsert(_ context.Context, namespace string, chunks []d
 		copy(emb, c.Embedding)
 		cp := c
 		cp.Embedding = emb
-		cp.Metadata = maps.Clone(c.Metadata)
+		cp.Metadata = cloneMetadata(c.Metadata)
 		m[string(c.ID)] = cp
 		stored++
 	}
 	log.Printf("fake_vectorstore: upserted %d vectors to namespace %q (total ns=%d)", stored, namespace, len(s.ns))
 	return nil
+}
+
+func validateMetadata(c domain.Chunk) error {
+	for key, value := range c.Metadata {
+		valid := true
+		switch v := value.(type) {
+		case string, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+		case []string:
+			valid = v != nil
+		case []any:
+			valid = v != nil
+			for _, item := range v {
+				if _, ok := item.(string); !ok {
+					valid = false
+					break
+				}
+			}
+		default:
+			valid = false
+		}
+		if !valid {
+			return fmt.Errorf("memory: metadata %q must be a string, number, bool or list of strings", key)
+		}
+	}
+	if _, err := json.Marshal(c.Metadata); err != nil {
+		return fmt.Errorf("memory: serialize metadata: %w", err)
+	}
+	// Count the same required fields and optional labels as the hosted adapter.
+	metadata := map[string]any{
+		"doc_id": string(c.DocumentID), "chunk_index": float64(c.Index),
+		"text": c.Text, "token_count": float64(c.TokenCount),
+	}
+	for _, key := range []string{"doc_type", "kind", "quality"} {
+		if value, ok := c.Metadata[key]; ok {
+			metadata[key] = value
+		}
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("memory: serialize vector metadata: %w", err)
+	}
+	if len(encoded) > 40960 {
+		return fmt.Errorf("memory: vector metadata exceeds 40960 bytes (%d bytes)", len(encoded))
+	}
+	return nil
+}
+
+func cloneMetadata(metadata map[string]any) map[string]any {
+	cloned := maps.Clone(metadata)
+	for key, value := range cloned {
+		switch list := value.(type) {
+		case []string:
+			cloned[key] = slices.Clone(list)
+		case []any:
+			cloned[key] = slices.Clone(list)
+		}
+	}
+	return cloned
 }
 
 // Query searches a single namespace by cosine similarity, honoring docTypeFilter.
@@ -70,6 +151,9 @@ func (s *FakeVectorStore) QueryAllNamespaces(_ context.Context, embedding []floa
 
 // QueryFiltered applies document scope before selecting the highest scores.
 func (s *FakeVectorStore) QueryFiltered(_ context.Context, embedding []float32, topK int, filter domain.VectorFilter) ([]domain.ScoredChunk, error) {
+	if topK > 10000 {
+		return nil, fmt.Errorf("memory: topK must not exceed 10000")
+	}
 	return s.query("", embedding, topK, filter), nil
 }
 
@@ -106,7 +190,7 @@ func (s *FakeVectorStore) query(namespace string, embedding []float32, topK int,
 			Text:       c.Text,
 			TokenCount: c.TokenCount,
 		}
-		out.Metadata = maps.Clone(c.Metadata)
+		out.Metadata = cloneMetadata(c.Metadata)
 		scored = append(scored, domain.ScoredChunk{
 			Chunk:     out,
 			Score:     cosine(embedding, c.Embedding),
