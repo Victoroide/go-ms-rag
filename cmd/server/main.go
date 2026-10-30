@@ -22,6 +22,7 @@ import (
 	"github.com/Victoroide/quarry-rag/internal/domain"
 	"github.com/Victoroide/quarry-rag/internal/embedder"
 	"github.com/Victoroide/quarry-rag/internal/llm"
+	"github.com/Victoroide/quarry-rag/internal/logctx"
 	"github.com/Victoroide/quarry-rag/internal/pipeline"
 	"github.com/Victoroide/quarry-rag/internal/retriever"
 	memstore "github.com/Victoroide/quarry-rag/internal/store/memory"
@@ -46,7 +47,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("startup: configuration error: %w", err)
 	}
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	slog.SetDefault(slog.New(logctx.NewHandler(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))))
 	logger := slog.Default()
 	startupCtx, startupCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer startupCancel()

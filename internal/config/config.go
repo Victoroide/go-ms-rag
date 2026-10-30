@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"strconv"
@@ -90,6 +91,7 @@ type Config struct {
 	HTTPReadTimeout   time.Duration
 	HTTPWriteTimeout  time.Duration
 	HTTPIdleTimeout   time.Duration
+	LogLevel          slog.Level
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -137,6 +139,9 @@ func Load() (*Config, error) {
 		*setting.dst = value
 	}
 	var err error
+	if cfg.LogLevel, err = envLogLevel(); err != nil {
+		return nil, err
+	}
 	if cfg.PineconeTimeout, err = envDurationOrDefault("PINECONE_TIMEOUT", 10*time.Second); err != nil {
 		return nil, err
 	}
@@ -342,6 +347,11 @@ func (c *Config) validate() error {
 	}
 	if c.HTTPIdleTimeout <= 0 {
 		return fmt.Errorf("config: HTTP_IDLE_TIMEOUT must be positive")
+	}
+	switch c.LogLevel {
+	case slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError:
+	default:
+		return fmt.Errorf("config: LOG_LEVEL must be debug, info, warn or error")
 	}
 	return nil
 }

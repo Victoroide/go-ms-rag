@@ -73,8 +73,5 @@ func NewRouter(deps *RouterDeps) http.Handler {
 	mux.HandleFunc("GET /documents/{doc_id}", middleware.RequireServiceTokens(tokens, handler.DocumentStatusHandler(deps.ChunkStore)))
 	mux.HandleFunc("GET /documents/{doc_id}/file", middleware.RequireServiceTokens(tokens, handler.FileHandler(deps.ChunkStore, deps.S3Client)))
 	mux.HandleFunc("DELETE /documents/{doc_id}", middleware.RequireServiceTokens(tokens, handler.DeleteHandler(deps.ChunkStore, deps.PineconeDriver, deps.S3Client)))
-	var h http.Handler = mux
-	h = middleware.Logging(h)
-	h = middleware.Recovery(h)
-	return h
+	return middleware.RequestID(middleware.Logging(middleware.Recovery(mux)))
 }
