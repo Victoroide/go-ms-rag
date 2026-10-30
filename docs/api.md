@@ -235,9 +235,10 @@ Response fields (200 OK):
 
 | Field | Type | Description |
 |---|---|---|
+| `finish_reason` | string | Completion reason when available: `stop`, `max_tokens`, `filtered`, `context_exceeded`, or `no_evidence` |
 | `answer` | string | Grounded answer in the question's language when evidence exists; fixed English no-information answer otherwise |
 | `mode` | string | Retrieval mode executed: `"LOCAL"` or `"GLOBAL"`; automatic routing reflects only authorized, visible candidate documents |
-| `chunks_used` | int | Count of chunks from completed documents remaining after visibility and allowlist filtering |
+| `chunks_used` | int | Count of chunks from completed documents remaining after visibility, allowlist and minimum relevance filtering |
 | `context_chunks` | int | Count of chunks retained after score thresholding and passed into the LLM context (optional) |
 | `context_tokens` | int | Estimated token count of the prompt context (optional) |
 | `early_exit` | bool | Indicates whether query execution completed early (optional) |
@@ -247,9 +248,13 @@ Response fields (200 OK):
 
 Malformed allowlist entries return 400 `allowed_document_ids must contain UUIDs`; a missing or null required allowlist returns 400 `allowed_document_ids is required`. Lists above `MAX_ALLOWED_DOCUMENT_IDS` return 400 before deduplication.
 
-If retrieval or the document allowlist leaves no evidence, the answer is `No relevant information was found to answer this question.` No synthesis model is called, `token_usage` fields are zero, and `early_exit` is true. A transient similarity-probe failure selects GLOBAL retrieval in automatic mode instead of failing the query; embedding or subsequent retrieval failures still return 500.
+If retrieval, the document allowlist, or `MIN_RELEVANCE_SCORE` leaves no evidence, the answer is `No relevant information was found to answer this question.` No synthesis model is called, `token_usage` fields are zero, `early_exit` is true and `finish_reason` is `no_evidence`. A transient similarity-probe failure selects GLOBAL retrieval in automatic mode instead of failing the query; embedding or subsequent retrieval failures use the error mapping below.
 
-Document visibility is checked against PostgreSQL before answer generation. Older processing rows with a stored fingerprint are treated as completed for compatibility. Failed, unfinished and missing documents contribute no chunks; a visibility lookup failure returns 500. The same empty-evidence response applies when visibility filtering removes all chunks.
+Document visibility is checked against PostgreSQL before answer generation. Older processing rows with a stored fingerprint are treated as completed for compatibility. Failed, unfinished and missing documents contribute no chunks; a visibility lookup failure uses the error mapping below. The same empty-evidence response applies when visibility filtering removes all chunks.
+
+`MIN_RELEVANCE_SCORE=0` disables the absolute relevance floor; positive values remove lower-scoring chunks before synthesis trimming.
+
+Each admitted query runs under `QUERY_TIMEOUT`; synthesis has the shorter `SYNTHESIS_TIMEOUT` budget. Earlier client deadlines take precedence. A canceled request produces no response body. Nonempty truncated or filtered answers retain their completion reason; empty synthesis text returns 502.
 
 Scored chunk fields:
 
@@ -271,7 +276,11 @@ Error Status Codes:
 | `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
 | `413 Payload Too Large` | `validation` | Request body exceeds the 1 MiB limit |
 | `415 Unsupported Media Type` | `validation` | Content-Type is not `application/json` |
-| `500 Internal Server Error` | `pipeline` | Unhandled error in query decomposition, embedding, vector retrieval, or model synthesis |
+| `504 Gateway Timeout` | `timeout` | The query or synthesis deadline expired: `query processing timed out` |
+| `503 Service Unavailable` | `overloaded` | Query admission exceeded `QUERY_QUEUE_TIMEOUT`: `too many concurrent queries`; `Retry-After: 1` |
+| `503 Service Unavailable` | `upstream_throttled` | Upstream throttling or exhausted quota: `upstream service is busy`; `Retry-After: 2` |
+| `502 Bad Gateway` | `synthesis` | Synthesis returned no text: `answer synthesis returned no text` |
+| `500 Internal Server Error` | `pipeline` | Other pipeline failures: `query processing failed`; internal error details are recorded only in server logs |
 
 Example:
 

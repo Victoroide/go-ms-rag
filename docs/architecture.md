@@ -199,9 +199,15 @@ sequenceDiagram
     Handler-->>Caller: 200 OK (answer, mode, chunks_used, scored_chunks, token_usage)
 ```
 
+### Query Time Budget
+
+Each handler admits up to `QUERY_CONCURRENCY` queries (default 32), waiting at most `QUERY_QUEUE_TIMEOUT` (default 2 seconds) before returning 503 with `Retry-After: 1`. Admission precedes all pipeline work. Each admitted query gets `QUERY_TIMEOUT` (default 60 seconds) across decomposition, routing, embedding, retrieval and synthesis. The synthesis call gets a nested `SYNTHESIS_TIMEOUT` (default 45 seconds); an earlier parent deadline always wins. Cancellation propagates to upstream calls and waiting queries.
+
+The AWS SDK retryer is the single transport retry layer for Bedrock, configured with `AWS_MAX_ATTEMPTS`. The ambassador makes one client call per operation and does not add backoff or retry throttled requests. Structured-output correction remains separate; answer synthesis uses the plain-text path without correction calls. SDK retries and their backoff share the synthesis or embedding deadline. Timeout errors return 504, upstream throttling returns 503 with `Retry-After: 2`, empty synthesis returns 502, and other failures return a generic 500. Full errors are logged at error level.
+
 ### Query Stages
 
-1. **DecomposeStage**: Sets the sub-query count from multi-need surface signals (comparison keywords, conjunctions, aggregation markers). Makes no database or generation calls.
+1. **DecomposeStage**: Logs the query byte length and first 12 hexadecimal SHA-256 digits without the query text. Sets the sub-query count from multi-need surface signals (comparison keywords, conjunctions, aggregation markers). Makes no database or generation calls.
 2. **RoutingStage**:
    - An empty allowlist skips embedding and retrieval. Otherwise, embeds the incoming query once using Bedrock Titan Embed V2. Explicit modes skip the routing probe.
    - Automatic routing probes the top five candidates with the same allowlist and document-type filters as retrieval, then removes unavailable documents. Entity matching reads only those candidates' previews, uses whole words, prefers full and longer phrases, and breaks ties by candidate score order.
@@ -218,11 +224,11 @@ sequenceDiagram
    - Retains the allowlist post-filter before synthesis as defense in depth. A nil allowlist allows all documents; an empty allowlist denies all documents.
    - Checks document visibility in PostgreSQL after the allowlist filter and before synthesis. Only completed documents contribute chunks, with a compatibility exception for older processing rows with a stored fingerprint whose final status write was lost. Failed, unfinished, deleted and missing documents are excluded even if their vectors remain searchable. Lookup failures stop the query; the top score is recomputed from visible chunks.
 4. **SynthesisStage**:
-   - If no authorized evidence remains, returns `No relevant information was found to answer this question.` with no model call, zero synthesis token usage and `early_exit=true`.
+   - When `MIN_RELEVANCE_SCORE` is positive, drops chunks below it before adaptive trimming; the default zero disables this floor. If no authorized evidence remains, returns `No relevant information was found to answer this question.` with no model call, zero synthesis token usage, `early_exit=true` and `finish_reason=no_evidence`.
    - Applies adaptive chunk trimming: drops chunks scoring below 55% of the top chunk's score, bounds chunk counts (5 chunks for simple queries, 8 for multi-need queries), and truncates chunk bodies at sentence boundaries near 1200 runes.
    - Selects synthesis model according to `SYNTHESIS_MODEL` (`fallback` defaults to Llama 4 Maverick, `primary` routes to Nova Micro, and `hybrid` dynamically routes based on multi-need detection).
    - Formulates the synthesis prompt with the instruction to answer strictly using retrieved excerpts and in the language of the user's question.
-   - Invokes AWS Bedrock Converse only for evidence-backed answers and aggregates synthesis token usage statistics.
+   - Invokes AWS Bedrock Converse only for evidence-backed answers and aggregates synthesis token usage statistics. Empty text is an error; nonempty output reports whether generation stopped, reached its token or context limit, or was filtered.
 
 ---
 
@@ -288,9 +294,9 @@ erDiagram
 6. The HTTP router and middleware chain are registered with standard network listeners.
 7. HTTP server listener begins serving with explicit timeout parameters:
    - Header read timeout: 5 seconds
-   - Body read timeout: 30 seconds
-   - Response write timeout: 120 seconds
-   - Idle keep-alive timeout: 60 seconds
+   - Body read timeout: `HTTP_READ_TIMEOUT` (default 60 seconds)
+   - Response write timeout: `HTTP_WRITE_TIMEOUT` (defaults to `QUERY_TIMEOUT + 15s`, 75 seconds with the default query budget)
+   - Idle keep-alive timeout: `HTTP_IDLE_TIMEOUT` (default 60 seconds)
 
 ### Worker Queue Mechanics
 
