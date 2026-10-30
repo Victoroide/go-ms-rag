@@ -120,6 +120,7 @@ Notable changes are grouped by release.
 
 ### Security
 
+- Wrap retrieved excerpts in per-request markers, place the question before them, and strip invisible characters from stored chunks before synthesis.
 - Stop logging query text; logs record its length and digest.
 
 - Remove invisible Unicode format characters, such as tag characters and bidirectional isolates, from ingested text.
