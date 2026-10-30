@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Victoroide/quarry-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/metrics"
 	"github.com/Victoroide/quarry-rag/internal/pipeline"
 	"github.com/aws/smithy-go"
 	"google.golang.org/grpc/codes"
@@ -22,6 +23,7 @@ type Options struct {
 	Workers, MaxAttempts            int
 	Lease, JobTimeout, PollInterval time.Duration
 	Owner                           string
+	Metrics                         *metrics.Service
 }
 
 var errLeaseLost = errors.New("ingestion lease lost")
@@ -42,6 +44,9 @@ type Worker struct {
 
 // New constructs a durable ingestion processor.
 func New(store domain.JobStore, stages []pipeline.Stage, vectors domain.VectorDeleter, opts Options) *Worker {
+	if opts.Metrics == nil {
+		opts.Metrics = metrics.Default
+	}
 	if opts.Workers < 1 {
 		opts.Workers = 2
 	}
@@ -145,6 +150,7 @@ func (w *Worker) ShutdownContext(ctx context.Context) error {
 }
 
 func (w *Worker) process(parent context.Context, job domain.Job) {
+	parent = metrics.WithService(parent, w.opts.Metrics)
 	timeoutCtx, stop := context.WithTimeout(parent, w.opts.JobTimeout)
 	defer stop()
 	ctx, cancel := context.WithCancelCause(timeoutCtx)
@@ -214,7 +220,7 @@ func (w *Worker) process(parent context.Context, job domain.Job) {
 		stateCtx, stateCancel := context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
 		defer stateCancel()
 		failErr := w.store.FailJob(stateCtx, job, err.Error())
-		w.logStateError(job, failErr)
+		w.recordOutcome(job, "failed", failErr)
 		if errors.Is(failErr, domain.ErrJobNotOwned) {
 			w.compensateDeleted(parent, job)
 		}
@@ -227,13 +233,13 @@ func (w *Worker) process(parent context.Context, job domain.Job) {
 		delay *= 2
 	}
 	delay = min(delay, 5*time.Minute) + time.Duration(rand.Int64N(int64(time.Second)+1)) // #nosec G404 -- Retry jitter does not require cryptographic randomness.
-	w.logStateError(job, w.store.RetryJob(stateCtx, job, delay, err.Error()))
+	w.recordOutcome(job, "retried", w.store.RetryJob(stateCtx, job, delay, err.Error()))
 }
 
 func (w *Worker) release(ctx context.Context, job domain.Job) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	w.logStateError(job, w.store.ReleaseJob(releaseCtx, job))
+	w.recordOutcome(job, "released", w.store.ReleaseJob(releaseCtx, job))
 }
 
 func (w *Worker) run(ctx context.Context, job domain.Job, ic *pipeline.IngestContext) (err error) {
@@ -256,6 +262,8 @@ func (w *Worker) run(ctx context.Context, job domain.Job, ic *pipeline.IngestCon
 	}
 	if !ok {
 		w.compensateDeleted(ctx, job)
+	} else {
+		w.opts.Metrics.IngestJobs.WithLabelValues("completed").Inc()
 	}
 	return nil
 }
@@ -293,5 +301,12 @@ func (w *Worker) deleteVectors(ctx context.Context, job domain.Job) {
 func (w *Worker) logStateError(job domain.Job, err error) {
 	if err != nil {
 		slog.Error("update ingestion state", "document_id", job.Document.ID, "error", err)
+	}
+}
+
+func (w *Worker) recordOutcome(job domain.Job, result string, err error) {
+	w.logStateError(job, err)
+	if err == nil {
+		w.opts.Metrics.IngestJobs.WithLabelValues(result).Inc()
 	}
 }

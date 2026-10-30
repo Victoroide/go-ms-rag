@@ -92,12 +92,14 @@ type Config struct {
 	HTTPWriteTimeout  time.Duration
 	HTTPIdleTimeout   time.Duration
 	LogLevel          slog.Level
+	MetricsAddr       string
 }
 
 // Load reads configuration from environment variables, applies defaults,
 // and validates required fields.
 func Load() (*Config, error) {
 	cfg := &Config{
+		MetricsAddr:           os.Getenv("METRICS_ADDR"),
 		ServerPort:            envOrDefault("SERVER_PORT", "8081"),
 		AWSRegion:             os.Getenv("AWS_REGION"),
 		AWSAccessKeyID:        os.Getenv("AWS_ACCESS_KEY_ID"),

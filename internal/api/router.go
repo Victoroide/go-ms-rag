@@ -12,6 +12,7 @@ import (
 	"github.com/Victoroide/quarry-rag/internal/domain"
 	"github.com/Victoroide/quarry-rag/internal/extractor"
 	"github.com/Victoroide/quarry-rag/internal/llm"
+	"github.com/Victoroide/quarry-rag/internal/metrics"
 	"github.com/Victoroide/quarry-rag/internal/retriever"
 	s3store "github.com/Victoroide/quarry-rag/internal/store/s3"
 	"github.com/Victoroide/quarry-rag/internal/worker"
@@ -30,6 +31,7 @@ type RouterDeps struct {
 	PineconeDriver domain.VectorDeleter
 	PGPool         *pgxpool.Pool
 	Probes         *handler.Probes
+	Metrics        *metrics.Service
 }
 
 // NewRouter wires all HTTP routes, handlers, and middleware.
@@ -73,5 +75,5 @@ func NewRouter(deps *RouterDeps) http.Handler {
 	mux.HandleFunc("GET /documents/{doc_id}", middleware.RequireServiceTokens(tokens, handler.DocumentStatusHandler(deps.ChunkStore)))
 	mux.HandleFunc("GET /documents/{doc_id}/file", middleware.RequireServiceTokens(tokens, handler.FileHandler(deps.ChunkStore, deps.S3Client)))
 	mux.HandleFunc("DELETE /documents/{doc_id}", middleware.RequireServiceTokens(tokens, handler.DeleteHandler(deps.ChunkStore, deps.PineconeDriver, deps.S3Client)))
-	return middleware.RequestID(middleware.Logging(middleware.Recovery(mux)))
+	return middleware.RequestID(middleware.Metrics(middleware.Logging(middleware.Recovery(mux)), deps.Metrics))
 }
