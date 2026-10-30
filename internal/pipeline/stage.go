@@ -66,8 +66,11 @@ type QueryContext struct {
 	// non-nil empty = matches nothing.
 	AllowedDocumentIDs []string
 
-	// Populated by decomposition stage.
-	NamedEntity string
+	// Populated by routing stage.
+	NamedEntity      string
+	EntityDocumentID string
+	Candidates       []domain.ScoredChunk
+	SkipRetrieval    bool
 
 	// Populated by routing stage.
 	RetrievalMode  string

@@ -198,14 +198,14 @@ Request fields:
 | `mode` | string | no | Retrieval mode: `"auto"` (default), `"local"`, or `"global"`. Case-insensitive |
 | `filter_doc_type` | string | no | Restricts vector retrieval to chunks matching the given `doc_type` |
 | `max_chunks` | int | no | Maximum chunks to retrieve (0 to 100). Defaults to `MAX_CHUNKS_PER_QUERY` (10) |
-| `allowed_document_ids` | array of strings | no | Optional tenant/role allowlist of document UUIDs. When omitted (`null`), retrieval is unrestricted. When provided as an empty list (`[]`), all chunks are excluded. Filters chunks before LLM synthesis |
+| `allowed_document_ids` | array of strings | no | Tenant/role allowlist of UUIDs, at most `MAX_ALLOWED_DOCUMENT_IDS` entries (default 25000). IDs are canonicalized and deduplicated. Omitted or `null` means unrestricted unless `REQUIRE_DOCUMENT_ALLOWLIST=true`, which makes a non-null field mandatory. An empty list (`[]`) returns the no-information answer without embedding or search. The allowlist is applied inside vector search and routing |
 
 Response fields (200 OK):
 
 | Field | Type | Description |
 |---|---|---|
 | `answer` | string | Grounded answer in the question's language when evidence exists; fixed English no-information answer otherwise |
-| `mode` | string | Retrieval mode executed: `"LOCAL"` or `"GLOBAL"` |
+| `mode` | string | Retrieval mode executed: `"LOCAL"` or `"GLOBAL"`; automatic routing reflects only authorized, visible candidate documents |
 | `chunks_used` | int | Count of chunks from completed documents remaining after visibility and allowlist filtering |
 | `context_chunks` | int | Count of chunks retained after score thresholding and passed into the LLM context (optional) |
 | `context_tokens` | int | Estimated token count of the prompt context (optional) |
@@ -213,6 +213,8 @@ Response fields (200 OK):
 | `stage_timings_ms` | map[string]int64 | Execution timings for pipeline stages in milliseconds (optional) |
 | `token_usage` | object | LLM token usage metrics (`input_tokens`, `output_tokens`, `total_tokens`) |
 | `scored_chunks` | array | Retrieved chunks ordered by similarity score |
+
+Malformed allowlist entries return 400 `allowed_document_ids must contain UUIDs`; a missing or null required allowlist returns 400 `allowed_document_ids is required`. Lists above `MAX_ALLOWED_DOCUMENT_IDS` return 400 before deduplication.
 
 If retrieval or the document allowlist leaves no evidence, the answer is `No relevant information was found to answer this question.` No synthesis model is called, `token_usage` fields are zero, and `early_exit` is true. A transient similarity-probe failure selects GLOBAL retrieval in automatic mode instead of failing the query; embedding or subsequent retrieval failures still return 500.
 

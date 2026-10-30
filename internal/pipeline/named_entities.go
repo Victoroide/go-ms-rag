@@ -1,16 +1,9 @@
 package pipeline
 
 import (
-	"context"
-	"fmt"
-	"log"
 	"strings"
-	"sync"
-	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // stopWords are common English words that should not be treated as named entities
@@ -96,79 +89,52 @@ func isCapitalised(word string) bool {
 	return unicode.IsLetter(r) && unicode.IsUpper(r)
 }
 
-// entityCache provides a TTL cache for named entities
-type entityCache struct {
-	mu        sync.RWMutex
-	entities  map[string]bool
-	fetchedAt time.Time
-	pool      *pgxpool.Pool
-	ttl       time.Duration
-}
-
-var globalEntityCache = &entityCache{
-	entities: make(map[string]bool),
-	ttl:      60 * time.Second, // 60 seconds TTL
-}
-
-// FetchNamedEntitiesFromDB retrieves all named entities from document previews
-// Uses a 60-second TTL cache to avoid database round-trips on every query
-func FetchNamedEntitiesFromDB(ctx context.Context, pool *pgxpool.Pool) (map[string]bool, error) {
-	if pool == nil {
-		return map[string]bool{}, nil
-	}
-	// Check cache first
-	globalEntityCache.mu.RLock()
-	if globalEntityCache.pool == pool && !globalEntityCache.fetchedAt.IsZero() && time.Since(globalEntityCache.fetchedAt) < globalEntityCache.ttl {
-		// Cache hit - return a copy to avoid concurrent modification issues
-		entities := make(map[string]bool)
-		for k, v := range globalEntityCache.entities {
-			entities[k] = v
-		}
-		globalEntityCache.mu.RUnlock()
-		return entities, nil
-	}
-	globalEntityCache.mu.RUnlock()
-
-	// Cache miss - fetch from database using the existing pool
-	rows, err := pool.Query(ctx, "SELECT content_preview FROM documents WHERE content_preview IS NOT NULL")
-	if err != nil {
-		return nil, fmt.Errorf("query previews: %w", err)
-	}
-	defer rows.Close()
-
-	entities := make(map[string]bool)
-	for rows.Next() {
-		var preview string
-		if err := rows.Scan(&preview); err != nil {
-			log.Printf("WARNING: scan preview: %v", err)
+// MatchNamedEntity selects the strongest whole-word match in candidate order.
+func MatchNamedEntity(query string, previews map[string]string, order []string) (entity, docID string) {
+	queryTokens := entityTokens(query)
+	bestClass, bestLength := 0, 0
+	for _, id := range order {
+		candidate := ExtractNamedEntity(previews[id])
+		tokens := entityTokens(candidate)
+		if len(tokens) == 0 {
 			continue
 		}
-
-		entity := ExtractNamedEntity(preview)
-		if entity != "" {
-			entities[entity] = true
-			// Individual words also help match abbreviated references to named entities.
-			// Each word of "cedar archive" is useful; generic words are already
-			// filtered out by ExtractNamedEntity's stop-word list.
-			for _, word := range strings.Fields(entity) {
-				if len(word) > 2 {
-					entities[word] = true
+		matchClass, matchLength := 0, 0
+		for start := 0; start+len(tokens) <= len(queryTokens); start++ {
+			matches := true
+			for i, token := range tokens {
+				if queryTokens[start+i] != token {
+					matches = false
+					break
+				}
+			}
+			if matches {
+				matchClass = 2
+				matchLength = utf8.RuneCountInString(candidate)
+				break
+			}
+		}
+		if matchClass == 0 {
+			for _, token := range tokens {
+				if utf8.RuneCountInString(token) <= 2 {
+					continue
+				}
+				for _, word := range queryTokens {
+					if word == token {
+						matchClass = 1
+						matchLength = max(matchLength, utf8.RuneCountInString(token))
+					}
 				}
 			}
 		}
+		if matchClass > bestClass || (matchClass == bestClass && matchLength > bestLength) {
+			entity, docID = candidate, id
+			bestClass, bestLength = matchClass, matchLength
+		}
 	}
+	return entity, docID
+}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read previews: %w", err)
-	}
-
-	// Update cache
-	globalEntityCache.mu.Lock()
-	globalEntityCache.pool = pool
-	globalEntityCache.entities = entities
-	globalEntityCache.fetchedAt = time.Now()
-	globalEntityCache.mu.Unlock()
-
-	log.Printf("fetchNamedEntities: cached %d entities (TTL: %s)", len(entities), globalEntityCache.ttl)
-	return entities, nil
+func entityTokens(text string) []string {
+	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 }

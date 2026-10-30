@@ -26,7 +26,7 @@ flowchart TD
     end
 
     subgraph QueryPipeline ["Query Pipeline (internal/pipeline)"]
-        H_Query --> Decompose["DecomposeStage\n(Entity & Multi-Need Signals)"]
+        H_Query --> Decompose["DecomposeStage\n(Multi-Need Signals)"]
         Decompose --> RouteMode["RoutingStage\n(LOCAL vs GLOBAL)"]
         RouteMode --> Retrieve["RetrievalStage\n(internal/retriever)"]
         Retrieve --> Synthesis["SynthesisStage\n(internal/llm)"]
@@ -58,7 +58,7 @@ flowchart TD
 - **`internal/extractor`**: Extracts plain text from uploaded document formats (PDF, DOCX, DOC, plain text) with context cancellation and XML safety bounds.
 - **`internal/embedder`**: Invokes AWS Bedrock Titan Embed V2 to generate 1024-dimensional normalized vector embeddings, throttling concurrent API requests via weighted semaphores. Provides a deterministic fake embedder for offline execution.
 - **`internal/llm`**: Manages LLM calls to AWS Bedrock Converse, executing model selection (Nova Micro vs. Llama 4 Maverick), plain-text answer synthesis, token estimation, and JSON retry-correction routines. Provides a fake converser for offline execution.
-- **`internal/retriever`**: Executes similarity searches across Pinecone vector namespaces, evaluates similarity scores against thresholds to select LOCAL or GLOBAL search modes, and applies fallback searches if initial results are sparse.
+- **`internal/retriever`**: Executes scoped similarity searches in the default vector namespace and evaluates authorized candidate scores to select LOCAL or GLOBAL search modes.
 - **`internal/worker`**: Buffers asynchronous document ingestion tasks in an in-memory channel, executing pipeline stages in a dedicated goroutine and tracking status updates in PostgreSQL.
 - **`internal/pipeline`**: Encapsulates sequential multi-stage pipelines:
   - **Ingestion Pipeline**: Executes `ChunkStage`, `EmbedStage`, and `PersistStage`.
@@ -158,7 +158,7 @@ sequenceDiagram
     actor Caller as Client Service
     participant Handler as QueryHandler
     participant Decompose as DecomposeStage
-    participant Cache as Named Entity Cache / DB
+    participant Metadata as PostgreSQL
     participant Routing as RoutingStage
     participant Embedder as AWS Bedrock (Embedder)
     participant Retrieval as RetrievalStage
@@ -170,29 +170,27 @@ sequenceDiagram
     Note over Handler: Validate JSON, bounds (1-10000 decoded bytes, max_chunks 0-100)
 
     Handler->>Decompose: Run(QueryContext)
-    Decompose->>Cache: FetchNamedEntitiesFromDB(pool)
-    Cache-->>Decompose: Cached proper noun phrases
-    Decompose->>Decompose: Inspect surface cues (multi-need signals, entity match)
-    Note over Decompose: Set SubQueries count & NamedEntity (no LLM call)
+    Decompose->>Decompose: Inspect multi-need surface cues
+    Note over Decompose: Set SubQueries count without database calls
 
     Handler->>Routing: Run(QueryContext)
-    Routing->>Embedder: EmbedQuery (Titan Embed V2)
-    Embedder-->>Routing: Query embedding & topScore
+    Note over Routing: Empty allowlist skips embedding and search
+    Routing->>Embedder: Embed query (Titan Embed V2)
+    Embedder-->>Routing: Query embedding
     alt Explicit mode provided
         Routing->>Routing: Use requested mode (LOCAL or GLOBAL)
     else Auto mode
+        Routing->>Pinecone: Probe top 5 with doc_type and allowlist filters
+        Pinecone-->>Routing: Scoped candidates
+        Routing->>Metadata: Check candidate visibility and load candidate previews
+        Metadata-->>Routing: Visible candidates and their previews
+        Routing->>Routing: Match entity phrases using whole words and candidate order
         Routing->>Routing: Determine mode (sub-queries > 1 -> GLOBAL, entity -> LOCAL, score >= threshold -> LOCAL, else GLOBAL)
     end
 
     Handler->>Retrieval: Run(QueryContext)
-    alt LOCAL mode
-        Retrieval->>Pinecone: Query namespace (doc_id) or top match with doc_type filter
-    else GLOBAL mode
-        Retrieval->>Pinecone: Query default namespace with doc_type filter
-        opt Chunks < 3
-            Retrieval->>Pinecone: Fallback QueryAllNamespaces (topK 20)
-        end
-    end
+    Retrieval->>Pinecone: Query default namespace with doc_type and allowlist filters
+    Note over Retrieval: One query per allowlist group, no sparse-result fallback
     Pinecone-->>Retrieval: Scored chunks
     Retrieval->>Retrieval: filterChunksByAllowedDocIDs (tenant allowlist enforcement)
     Retrieval->>Retrieval: Remove chunks of unavailable documents using PostgreSQL
@@ -212,9 +210,10 @@ sequenceDiagram
 
 ### Query Stages
 
-1. **DecomposeStage**: Analyzes query phrasing for multi-need surface signals (comparison keywords, conjunctions, aggregation markers) and matches query terms against cached named entities extracted from document previews. Operates purely through local heuristics without LLM invocation.
+1. **DecomposeStage**: Sets the sub-query count from multi-need surface signals (comparison keywords, conjunctions, aggregation markers). Makes no database or generation calls.
 2. **RoutingStage**:
-   - Generates a vector embedding for the incoming query using Bedrock Titan Embed V2.
+   - An empty allowlist skips embedding and retrieval. Otherwise, embeds the incoming query once using Bedrock Titan Embed V2. Explicit modes skip the routing probe.
+   - Automatic routing probes the top five candidates with the same allowlist and document-type filters as retrieval, then removes unavailable documents. Entity matching reads only those candidates' previews, uses whole words, prefers full and longer phrases, and breaks ties by candidate score order.
    - Evaluates whether to route to `LOCAL` or `GLOBAL` retrieval:
      - If the caller passed an explicit mode (`local` or `global`), that mode is used.
      - If the similarity probe fails, `GLOBAL` retrieval is selected without discarding the query embedding.
@@ -224,10 +223,8 @@ sequenceDiagram
      - Otherwise, `GLOBAL` mode is selected.
 3. **RetrievalStage**:
    - Queries Pinecone using the embedding produced during routing.
-   - In `LOCAL` mode, queries the specific document namespace or falls back to default.
-   - In `GLOBAL` mode, queries the default namespace. If fewer than 3 chunks are returned, an automatic fallback queries across namespaces up to a limit of 20 chunks.
-   - Applies `filter_doc_type` metadata filter when specified.
-   - Applies caller-supplied `allowed_document_ids` allowlists, filtering out chunks outside the allowlist prior to synthesis. A nil allowlist allows all documents; an empty allowlist denies all documents.
+   - Both modes query the default namespace with `filter_doc_type` and `allowed_document_ids` applied before top-K selection. GLOBAL issues a single query without a sparse-result fallback. Allowlists above 10000 IDs require one sequential query per group; results merge by chunk ID using the highest score, then sort and trim to top-K.
+   - Retains the allowlist post-filter before synthesis as defense in depth. A nil allowlist allows all documents; an empty allowlist denies all documents.
    - Checks document visibility in PostgreSQL after the allowlist filter and before synthesis. Only completed documents contribute chunks, with a compatibility exception for older processing rows with a stored fingerprint whose final status write was lost. Failed, unfinished, deleted and missing documents are excluded even if their vectors remain searchable. Lookup failures stop the query; the top score is recomputed from visible chunks.
 4. **SynthesisStage**:
    - If no authorized evidence remains, returns `No relevant information was found to answer this question.` with no model call, zero synthesis token usage and `early_exit=true`.

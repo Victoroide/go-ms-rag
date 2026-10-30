@@ -20,6 +20,10 @@ Notable changes are grouped by release.
 
 - Content deduplication applies only to requests without `document_id`;
   fingerprint lookup failures return 503.
+- `allowed_document_ids` entries must be UUIDs (at most
+  `MAX_ALLOWED_DOCUMENT_IDS`); an empty list returns the no-information answer
+  without embedding or search; GLOBAL retrieval issues a single vector query.
+
 - New documents are indexed only in the default vector namespace; per-document
   namespaces created by earlier versions are still removed on deletion.
 - Database connections default to 16 pooled connections and a 30-second statement
@@ -58,6 +62,9 @@ Notable changes are grouped by release.
 - Keep caller-supplied document identifiers: identical resubmissions return the
   same identifier, conflicting content returns 409, malformed identifiers return
   400, and existing documents are never overwritten.
+- Restricted queries no longer lose authorized evidence to documents outside
+  the allowlist.
+
 - Apply each schema migration once under a PostgreSQL advisory lock and record it
   in `schema_migrations`, so concurrent replicas start safely and restarts take
   no table locks.
@@ -77,6 +84,9 @@ Notable changes are grouped by release.
 - Report panic responses as JSON and log the status actually written.
 
 ### Security
+
+- Apply document allowlists and type filters inside every vector query, including
+  the routing probe, and derive entity routing only from authorized candidates.
 
 - Remove the implicit `S3_BUCKET` default, verify bucket access and an optional
   expected owner at startup, and send the expected owner on storage writes.

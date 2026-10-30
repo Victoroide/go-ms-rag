@@ -59,16 +59,28 @@ func (s *FakeVectorStore) Upsert(_ context.Context, namespace string, chunks []d
 
 // Query searches a single namespace by cosine similarity, honoring docTypeFilter.
 func (s *FakeVectorStore) Query(_ context.Context, namespace string, embedding []float32, topK int, docTypeFilter string) ([]domain.ScoredChunk, error) {
-	return s.query(namespace, embedding, topK, docTypeFilter), nil
+	return s.query(namespace, embedding, topK, domain.VectorFilter{DocType: docTypeFilter}), nil
 }
 
 // QueryAllNamespaces searches the default ("") namespace, mirroring the
 // Pinecone driver's dual-write semantics where every vector also lives in "".
 func (s *FakeVectorStore) QueryAllNamespaces(_ context.Context, embedding []float32, topK int, docTypeFilter string) ([]domain.ScoredChunk, error) {
-	return s.query("", embedding, topK, docTypeFilter), nil
+	return s.query("", embedding, topK, domain.VectorFilter{DocType: docTypeFilter}), nil
 }
 
-func (s *FakeVectorStore) query(namespace string, embedding []float32, topK int, docTypeFilter string) []domain.ScoredChunk {
+// QueryFiltered applies document scope before selecting the highest scores.
+func (s *FakeVectorStore) QueryFiltered(_ context.Context, embedding []float32, topK int, filter domain.VectorFilter) ([]domain.ScoredChunk, error) {
+	return s.query("", embedding, topK, filter), nil
+}
+
+func (s *FakeVectorStore) query(namespace string, embedding []float32, topK int, filter domain.VectorFilter) []domain.ScoredChunk {
+	if filter.MatchesNothing() {
+		return []domain.ScoredChunk{}
+	}
+	allowed := make(map[string]struct{}, len(filter.DocumentIDs))
+	for _, id := range filter.DocumentIDs {
+		allowed[id] = struct{}{}
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	m, ok := s.ns[namespace]
@@ -77,8 +89,13 @@ func (s *FakeVectorStore) query(namespace string, embedding []float32, topK int,
 	}
 	scored := make([]domain.ScoredChunk, 0, len(m))
 	for _, c := range m {
-		if docTypeFilter != "" {
-			if dt, _ := c.Metadata["doc_type"].(string); dt != docTypeFilter {
+		if filter.DocumentIDs != nil {
+			if _, ok := allowed[string(c.DocumentID)]; !ok {
+				continue
+			}
+		}
+		if filter.DocType != "" {
+			if dt, _ := c.Metadata["doc_type"].(string); dt != filter.DocType {
 				continue
 			}
 		}
@@ -96,7 +113,12 @@ func (s *FakeVectorStore) query(namespace string, embedding []float32, topK int,
 			Namespace: namespace,
 		})
 	}
-	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].Score == scored[j].Score {
+			return scored[i].Chunk.ID < scored[j].Chunk.ID
+		}
+		return scored[i].Score > scored[j].Score
+	})
 	if topK > 0 && len(scored) > topK {
 		scored = scored[:topK]
 	}
