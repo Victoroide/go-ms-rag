@@ -81,7 +81,7 @@ Integration tests verify database persistence, transactional rollbacks, schema m
 go test -race -count=1 ./test/integration/...
 ```
 
-Docker must be running locally to permit Testcontainers to manage the ephemeral PostgreSQL database instance. The two database-backed tests skip under `go test -short` with an explicit daemon requirement message; CI runs the full suite without `-short`.
+Docker must be running locally to permit Testcontainers to manage the ephemeral PostgreSQL database instance. Database-backed tests skip under `go test -short` with an explicit daemon requirement message; CI runs the full suite without `-short`. The offline query test ingests through HTTP, polls document status until completion, and verifies cited evidence and document restrictions through the router.
 
 ### 3. Smoke Tests
 
@@ -150,3 +150,5 @@ When `FakeMode` is active in `cmd/server/main.go`:
 5. **Relational Storage**: PostgreSQL is still utilized via `DATABASE_URL` for real schema migrations (001–006), metadata storage, and duplicate fingerprint tracking.
 
 Durable ingestion tests use disposable PostgreSQL databases and the offline vector store to cover restart recovery, terminal failures, deletion during processing, NUL handling and source upload failures. Lease and atomic acceptance tests live in `internal/store/postgres/jobs_test.go`; the short suite skips database-backed tests.
+
+The offline vector store enforces the hosted index's per-record limits: flat metadata values must be strings, numbers, booleans or lists of strings, serialized vector metadata must fit within 40,960 bytes, and vector identifiers must fit within 512 bytes. The metadata size includes chunk text and the required fields sent by the hosted adapter. The first stored embedding fixes the index dimension across all namespaces; later embeddings must match. Filtered queries accept at most 10,000 results. Upserts have no per-call batch limit because the hosted adapter batches requests. Offline writes are immediately consistent; the hosted index is eventually consistent.
