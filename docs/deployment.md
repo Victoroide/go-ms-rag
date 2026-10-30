@@ -17,6 +17,22 @@ access log with status 500. If headers or a partial body were already sent,
 recovery preserves that response and the access log records its original status.
 Aborted handlers propagate to the HTTP server without a recovered panic error.
 
+## Metrics
+
+`METRICS_ADDR` is empty by default. Set it to a listen address such as
+`127.0.0.1:9090` to serve `GET /metrics` separately from the API. Bind it to a
+private interface and never expose it publicly. The listener has no
+service-token authentication; restrict monitoring access with network policy or
+firewall rules. Container port publishing must preserve that private access.
+The listener uses bounded HTTP timeouts and shuts down with the API after the
+readiness drain delay, waiting for active scrapes within the shutdown deadline.
+
+Scrape the per-process counters and histograms for request status, latency,
+pipeline stages, ingestion outcomes and effective retrieval mode. The pending-job
+gauge reads the shared PostgreSQL queue at most once every 10 seconds per process
+and includes delayed retries, excluding running jobs. On database errors it keeps
+the last successful value, or `NaN` before its first successful refresh.
+
 ## Container Image
 
 The service is packaged using a multi-stage Docker build that outputs a minimal, non-root runtime container based on Alpine Linux.

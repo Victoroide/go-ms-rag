@@ -9,6 +9,7 @@ The table below lists every environment variable parsed by the service:
 | Variable | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `SERVER_PORT` | string | `"8081"` | 1 to 65535 | TCP port on which the HTTP server listens. |
+| `METRICS_ADDR` | string | `""` (disabled) | Optional TCP listen address | Separate metrics listener; bind to a private interface and never expose publicly. |
 | `LOG_LEVEL` | string | `info` | `debug`, `info`, `warn`, `error` (case-insensitive, trimmed) | Minimum severity emitted to stderr as JSON. Access logs use info; recovered panics use error. |
 | `SHUTDOWN_DRAIN_DELAY` | duration | `5s` | 0s to 60s | Delay after readiness starts returning draining, before HTTP shutdown. A second termination signal skips the remaining delay. |
 | `HEALTH_CACHE_TTL` | duration | `10s` | 1s to 5m | Lifetime of the dependency snapshot shared by diagnostics and readiness. Concurrent requests share one refresh; failures are cached too. |
@@ -81,3 +82,24 @@ Application connections default to `pool_max_conns=16` and `statement_timeout=30
 | `004_add_doc_type.sql` | Adds the `doc_type` column to `documents` and backfills values from `metadata->>'doc_type'`. |
 | `005_document_default.sql` | Sets the default column value for `doc_type` in `documents` to `'document'`. |
 | `006_ingest_jobs.sql` | Adds durable ingestion jobs, lease and failure tracking, completion timestamps and document fingerprints. Normalizes previously persisted processing rows with fingerprints to completed and requeues other processing rows. |
+
+## Metrics
+
+Set `METRICS_ADDR` to enable `GET /metrics` on a separate listener. The main API
+listener does not serve metrics. Bind the metrics listener to a private interface
+and restrict access to the monitoring system; it has no service-token check.
+
+Metrics use Prometheus text format. Request counts use `route` and `code` labels;
+request duration uses `route`. Routes are matched method and path patterns, or
+`unmatched` for requests with no matching pattern. Pipeline durations use `stage`,
+ingestion outcomes use `result`, and query counts use the effective `mode`
+(`LOCAL` or `GLOBAL`). All durations are in seconds. Histograms use boundaries
+0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60 and 120 seconds,
+plus the cumulative positive-infinity bucket.
+
+`quarry_ingest_jobs_pending` counts database rows in the `pending` state,
+including delayed retries and excluding running leases. Concurrent scrapes share
+a 10-second cache, including failed refreshes. A failed refresh retains the last
+successful value, or reports `NaN` before any successful refresh. This gauge is
+shared across replicas through the database; do not sum it across replicas.
+Other counters and histograms describe the current process and reset on restart.
