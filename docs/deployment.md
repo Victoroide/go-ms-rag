@@ -87,10 +87,26 @@ In production deployments (`GO_RAG_FAKE_MODE=false`), the microservice connects 
 ### 2. Pinecone (Vector Index)
 
 - **Configuration**: `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, and optional `PINECONE_ENVIRONMENT`.
+- **API Version**: The v5 Go SDK uses Pinecone API version `2025-10`.
 - **Startup Requirements**: The index dimension must equal `EMBEDDING_DIMENSIONS` (default: 1024), the metric must be `cosine`, and the index must be ready. Startup fails if any requirement is unmet.
 - **Request Limits**: Upserts use at most `PINECONE_UPSERT_BATCH_SIZE` records (default 100) and 1.5 MiB of estimated encoded data per batch. `PINECONE_TIMEOUT` bounds each attempt (default 10 seconds), and `PINECONE_MAX_ATTEMPTS` limits write and deletion attempts (default 5).
 - **Deletion**: If metadata-filter deletion returns `InvalidArgument`, `Unimplemented`, or `FailedPrecondition`, the service queries the default namespace with an exact `doc_id` filter and deletes the returned identifiers in batches of at most 1,000. Each identifier is deleted once per operation, so stale query results do not repeat deletions. Enumeration stops when no new identifiers appear or after deleting a result with fewer than 1,000 matches, and otherwise fails after 10 rounds. Missing vectors and namespaces are accepted as already deleted.
-- **Purpose**: High-dimensional vector search. Chunks are upserted only into the default namespace (`""`), with `doc_id` metadata identifying each document. Per-document namespaces created by earlier versions are removed when their document is deleted.
+- **Purpose**: High-dimensional vector search. Chunks are upserted only into the default namespace (`""`), which the SDK maps to `__default__` and the console displays as `__default__`, with `doc_id` metadata identifying each document. Per-document namespaces created by earlier versions are removed when their document is deleted. All namespace operations share one connection, which closes only when the client shuts down.
+
+#### SDK Deployment Verification
+
+Before upgrading, record the UUID of a completed, searchable staging document in the default namespace. Deploy to staging first, with `GO_RAG_FAKE_MODE=false`, and expose the staging server at `localhost:8081`. Configure the test environment with the staging service token and the same external service settings as the staging server.
+
+Before promoting the upgrade, the opt-in smoke suite must pass against the deployment's own index with `RUN_SMOKE=1` and `SMOKE_EXISTING_DOCUMENT_ID` set to a document ingested before the upgrade. The Pinecone service determines whether the legacy empty namespace (`""`) and `__default__` refer to the same data; the SDK mapping alone does not establish their equivalence.
+
+Run the smoke suite with that preexisting document UUID:
+
+```sh
+RUN_SMOKE=1 SMOKE_EXISTING_DOCUMENT_ID="<pre-upgrade-document-uuid>" \
+  go test ./test/smoke/... -count=1 -v -timeout 600s
+```
+
+Confirm that `TestSmoke_PreexistingDocumentRemainsRetrievable` passes without skipping: the direct index check must find the preexisting document's vectors, and a service query restricted to that document must return at least one chunk from it. If the direct check succeeds but the service reports `no_evidence`, check `MIN_RELEVANCE_SCORE` and the query before retrying. This check reads the document without reingesting or deleting it. The other smoke checks create and delete their own documents. Promote only after the staging suite passes. To roll back, revert the SDK upgrade and redeploy; stored documents and vectors are unaffected.
 
 ### 3. AWS Bedrock (Embedding and LLM Models)
 
