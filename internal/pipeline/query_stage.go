@@ -96,19 +96,17 @@ func (s *RoutingStage) ID() StageID { return StageRetrievalRouting }
 func (s *RoutingStage) Run(ctx context.Context, qc *QueryContext) error {
 	filter := domain.VectorFilter{DocType: qc.FilterDocType, DocumentIDs: qc.AllowedDocumentIDs}
 	qc.NamedEntity, qc.EntityDocumentID = "", ""
+	qc.LocalDocumentID = ""
 	qc.Candidates, qc.QueryEmbedding = nil, nil
 	qc.TopScore, qc.SkipRetrieval = 0, false
 	explicit := qc.RequestedMode != "" && !strings.EqualFold(qc.RequestedMode, "auto")
 	qc.RetrievalMode = string(retriever.RetrievalModeGlobal)
-	if explicit {
-		qc.RetrievalMode = strings.ToUpper(qc.RequestedMode)
-	}
 	if filter.MatchesNothing() {
 		qc.SkipRetrieval = true
 		return nil
 	}
 	probeK := 5
-	if explicit {
+	if strings.EqualFold(qc.RequestedMode, "global") {
 		probeK = 0
 	}
 	embedding, candidates, probeFailed, err := s.ret.EmbedQuery(ctx, qc.OriginalQuery, filter, probeK)
@@ -116,7 +114,7 @@ func (s *RoutingStage) Run(ctx context.Context, qc *QueryContext) error {
 		return fmt.Errorf("routing_stage: %w", err)
 	}
 	qc.QueryEmbedding = embedding
-	if explicit || probeFailed {
+	if probeK == 0 || probeFailed {
 		return nil
 	}
 	candidates = filterChunksByAllowedDocIDs(candidates, qc.AllowedDocumentIDs)
@@ -125,10 +123,11 @@ func (s *RoutingStage) Run(ctx context.Context, qc *QueryContext) error {
 		return fmt.Errorf("routing_stage: visibility: %w", err)
 	}
 	qc.Candidates = candidates
-	if len(candidates) > 0 {
-		qc.TopScore = candidates[0].Score
+	if len(candidates) == 0 {
+		return nil
 	}
-	if s.previews != nil && len(candidates) > 0 {
+	qc.TopScore = candidates[0].Score
+	if s.previews != nil {
 		ids := candidateDocumentIDs(candidates)
 		previews, err := s.previews.DocumentPreviews(ctx, ids)
 		if err != nil {
@@ -137,6 +136,15 @@ func (s *RoutingStage) Run(ctx context.Context, qc *QueryContext) error {
 		qc.NamedEntity, qc.EntityDocumentID = MatchNamedEntity(qc.OriginalQuery, previews, ids)
 	}
 	qc.RetrievalMode = string(s.ret.DetermineModeWithQuery(len(qc.SubQueries), qc.TopScore, qc.NamedEntity))
+	if explicit {
+		qc.RetrievalMode = strings.ToUpper(qc.RequestedMode)
+	}
+	if qc.RetrievalMode == string(retriever.RetrievalModeLocal) {
+		qc.LocalDocumentID = qc.EntityDocumentID
+		if qc.LocalDocumentID == "" {
+			qc.LocalDocumentID = string(candidates[0].Chunk.DocumentID)
+		}
+	}
 	return nil
 }
 
@@ -200,13 +208,14 @@ func (s *RetrievalStage) Run(ctx context.Context, qc *QueryContext) error {
 	}
 	filter := domain.VectorFilter{DocType: qc.FilterDocType, DocumentIDs: qc.AllowedDocumentIDs}
 	mode := retriever.RetrievalMode(qc.RetrievalMode)
-	var result *retriever.Result
-	var err error
-	if len(qc.QueryEmbedding) > 0 {
-		result, err = s.ret.RetrieveWithEmbedding(ctx, qc.QueryEmbedding, mode, qc.MaxChunks, filter)
-	} else {
-		result, err = s.ret.Retrieve(ctx, qc.OriginalQuery, mode, qc.MaxChunks, filter)
+	if len(qc.QueryEmbedding) == 0 {
+		embedding, _, _, err := s.ret.EmbedQuery(ctx, qc.OriginalQuery, filter, 0)
+		if err != nil {
+			return fmt.Errorf("retrieval_stage: %w", err)
+		}
+		qc.QueryEmbedding = embedding
 	}
+	result, err := s.ret.RetrieveWithEmbedding(ctx, qc.QueryEmbedding, mode, qc.LocalDocumentID, qc.MaxChunks, filter)
 	if err != nil {
 		return fmt.Errorf("retrieval_stage: %w", err)
 	}
@@ -221,6 +230,7 @@ func (s *RetrievalStage) Run(ctx context.Context, qc *QueryContext) error {
 		return fmt.Errorf("retrieval_stage: visibility: %w", err)
 	}
 	qc.RetrievedChunks = chunks
+	qc.RetrievalMode = string(result.Mode)
 	if len(chunks) > 0 {
 		qc.TopScore = chunks[0].Score
 	}

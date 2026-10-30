@@ -96,7 +96,7 @@ func TestRoutingProbeFailureFallsBackToGlobal(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, failed)
 	require.Zero(t, score)
-	result, err := ret.RetrieveWithEmbedding(t.Context(), embedding, retriever.RetrievalModeGlobal, 10, domain.VectorFilter{})
+	result, err := ret.RetrieveWithEmbedding(t.Context(), embedding, retriever.RetrievalModeGlobal, "", 10, domain.VectorFilter{})
 	require.NoError(t, err)
 	require.Len(t, result.Chunks, 1)
 }

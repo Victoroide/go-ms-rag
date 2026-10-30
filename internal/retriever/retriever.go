@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 
 	"github.com/Victoroide/quarry-rag/internal/domain"
@@ -63,19 +64,52 @@ func (r *Retriever) Retrieve(ctx context.Context, query string, mode RetrievalMo
 	if err != nil {
 		return nil, fmt.Errorf("retriever: embed query: %w", err)
 	}
-	return r.RetrieveWithEmbedding(ctx, embedding, mode, topK, filter)
+	return r.RetrieveWithEmbedding(ctx, embedding, mode, "", topK, filter)
 }
 
 // RetrieveWithEmbedding runs the retrieval pipeline against a caller-
 // supplied query embedding. Used by the query stage chain to avoid
 // embedding the same text twice (once in routing, once here).
-func (r *Retriever) RetrieveWithEmbedding(ctx context.Context, embedding []float32, mode RetrievalMode, topK int, filter domain.VectorFilter) (*Result, error) {
+// LOCAL searches localDocID first and tops up sparse results from filter.
+func (r *Retriever) RetrieveWithEmbedding(ctx context.Context, embedding []float32, mode RetrievalMode, localDocID string, topK int, filter domain.VectorFilter) (*Result, error) {
 	if topK <= 0 {
 		topK = r.topK
 	}
-	chunks, err := r.queryFiltered(ctx, embedding, topK, filter)
+	if filter.MatchesNothing() {
+		return &Result{Mode: mode}, nil
+	}
+	queryFilter := filter
+	if mode == RetrievalModeLocal {
+		if localDocID == "" || (filter.DocumentIDs != nil && !slices.Contains(filter.DocumentIDs, localDocID)) {
+			mode = RetrievalModeGlobal
+		} else {
+			queryFilter.DocumentIDs = []string{localDocID}
+		}
+	}
+	chunks, err := r.queryFiltered(ctx, embedding, topK, queryFilter)
 	if err != nil {
 		return nil, fmt.Errorf("retriever: query: %w", err)
+	}
+	if mode == RetrievalModeLocal && len(chunks) < 3 {
+		extra, err := r.queryFiltered(ctx, embedding, topK, filter)
+		if err != nil {
+			return nil, fmt.Errorf("retriever: top up: %w", err)
+		}
+		merged := make([]domain.ScoredChunk, 0, len(chunks)+len(extra))
+		byID := make(map[domain.ChunkID]int, len(chunks)+len(extra))
+		for _, batch := range [][]domain.ScoredChunk{chunks, extra} {
+			for _, sc := range batch {
+				if i, ok := byID[sc.Chunk.ID]; ok {
+					if sc.Score > merged[i].Score {
+						merged[i] = sc
+					}
+				} else {
+					byID[sc.Chunk.ID] = len(merged)
+					merged = append(merged, sc)
+				}
+			}
+		}
+		chunks = merged
 	}
 
 	// Sort by score descending.
