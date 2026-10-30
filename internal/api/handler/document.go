@@ -73,16 +73,21 @@ func DeleteHandler(cs domain.ChunkStore, pcDriver domain.VectorDeleter, s3Client
 	}
 }
 
-// ListDocumentsHandler returns every stored document reference (id, doc_type,
-// s3_key) for reconciliation with caller-owned records. Service-token protected;
-// emits no document content.
+// ListDocumentsHandler returns document summaries or legacy references.
 func ListDocumentsHandler(cs domain.ChunkStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if lister, ok := cs.(domain.DocumentLister); ok {
+			listDocumentSummaries(w, r, lister)
+			return
+		}
 		docs, err := cs.ListDocuments(r.Context())
 		if err != nil {
 			slog.ErrorContext(r.Context(), "list documents", "error", err)
 			writeJSONError(w, http.StatusInternalServerError, "internal", "failed to list documents")
 			return
+		}
+		if docs == nil {
+			docs = []domain.DocumentRef{}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{"documents": docs, "count": len(docs)}); err != nil {
