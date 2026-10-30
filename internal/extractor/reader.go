@@ -4,12 +4,24 @@ import (
 	"context"
 	"fmt"
 	"io"
+
+	"github.com/Victoroide/quarry-rag/internal/domain"
 )
 
 const (
 	maxSourceBytes      = 100 << 20
 	maxDocumentXMLBytes = 16 << 20
 )
+
+// ErrContentTooLarge indicates that extracted text exceeds the content byte limit.
+var ErrContentTooLarge = fmt.Errorf("extracted text exceeds %d bytes", domain.MaxContentBytes)
+
+func checkTextLimit(n int) error {
+	if n > domain.MaxContentBytes {
+		return ErrContentTooLarge
+	}
+	return nil
+}
 
 type contextReader struct {
 	ctx    context.Context

@@ -52,6 +52,9 @@ func (e *docxExtractor) Extract(ctx context.Context, r io.Reader) (string, error
 	}
 
 	text = strings.TrimSpace(text)
+	if err := checkTextLimit(len(text)); err != nil {
+		return "", err
+	}
 	if len(text) < 10 {
 		return "", fmt.Errorf("extractor: docx: no readable text found")
 	}
@@ -63,6 +66,7 @@ func parseDocumentXML(r io.Reader) (string, error) {
 	decoder := xml.NewDecoder(r)
 	var paragraphs []string
 	var paragraph strings.Builder
+	textBytes := 0
 	inParagraph, inText := false, false
 	const wordNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 	for {
@@ -84,13 +88,17 @@ func parseDocumentXML(r io.Reader) (string, error) {
 				paragraph.Reset()
 			case "t":
 				inText = inParagraph
-			case "tab":
+			case "tab", "br", "cr":
 				if inParagraph {
-					paragraph.WriteByte('\t')
-				}
-			case "br", "cr":
-				if inParagraph {
-					paragraph.WriteByte('\n')
+					textBytes++
+					if err := checkTextLimit(textBytes); err != nil {
+						return "", err
+					}
+					separator := byte('\n')
+					if t.Name.Local == "tab" {
+						separator = '\t'
+					}
+					paragraph.WriteByte(separator)
 				}
 			}
 		case xml.EndElement:
@@ -102,12 +110,22 @@ func parseDocumentXML(r io.Reader) (string, error) {
 				inText = false
 			case "p":
 				if text := strings.TrimSpace(paragraph.String()); text != "" {
+					if len(paragraphs) > 0 {
+						textBytes++
+						if err := checkTextLimit(textBytes); err != nil {
+							return "", err
+						}
+					}
 					paragraphs = append(paragraphs, text)
 				}
 				inParagraph, inText = false, false
 			}
 		case xml.CharData:
 			if inText {
+				textBytes += len(t)
+				if err := checkTextLimit(textBytes); err != nil {
+					return "", err
+				}
 				paragraph.Write(t)
 			}
 		}

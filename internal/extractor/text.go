@@ -17,6 +17,9 @@ func (e *textExtractor) Extract(ctx context.Context, r io.Reader) (string, error
 		return "", fmt.Errorf("extractor: text: %w", err)
 	}
 	text := strings.TrimSpace(string(data))
+	if err := checkTextLimit(len(text)); err != nil {
+		return "", err
+	}
 	if len(text) < 10 {
 		return "", fmt.Errorf("extractor: text: no readable text found")
 	}
