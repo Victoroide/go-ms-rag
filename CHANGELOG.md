@@ -25,6 +25,8 @@ Notable changes are grouped by release.
 - Deleting a document with a stored file returns 503 when file storage is not
   configured; deletion continues after the caller disconnects; presigned
   downloads are served as attachments.
+- Startup fails when the vector index dimension, metric or readiness does not
+  match the configuration.
 - Document labels default to `document` when omitted and are never inferred from
   content; migration 005 changes the database default without relabelling rows.
 - Evidence-backed answers follow the question's language. Empty authorized
@@ -54,6 +56,10 @@ Notable changes are grouped by release.
 - Apply each schema migration once under a PostgreSQL advisory lock and record it
   in `schema_migrations`, so concurrent replicas start safely and restarts take
   no table locks.
+- Write vectors in batches of at most 100 records by default and 1.5 MiB with
+  retries, so documents near the 1,000,000-byte limit no longer exceed the vector
+  index request limit; reuse one index connection; fall back to identifier-based
+  deletion when metadata-filter deletion is rejected.
 - Wait for active requests and accepted ingestion work before closing stores;
   repeated shutdown and concurrent enqueue no longer race channel closure.
 - Persist failure status with a bounded independent context after cancellation.

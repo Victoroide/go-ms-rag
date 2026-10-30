@@ -48,8 +48,9 @@ In production deployments (`GO_RAG_FAKE_MODE=false`), the microservice connects 
 ### 2. Pinecone (Vector Index)
 
 - **Configuration**: `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, and optional `PINECONE_ENVIRONMENT`.
-- **Index Dimensions**: Must match `EMBEDDING_DIMENSIONS` (default: 1024).
-- **Metric**: Cosine similarity.
+- **Startup Requirements**: The index dimension must equal `EMBEDDING_DIMENSIONS` (default: 1024), the metric must be `cosine`, and the index must be ready. Startup fails if any requirement is unmet.
+- **Request Limits**: Upserts use at most `PINECONE_UPSERT_BATCH_SIZE` records (default 100) and 1.5 MiB of estimated encoded data per batch. `PINECONE_TIMEOUT` bounds each attempt (default 10 seconds), and `PINECONE_MAX_ATTEMPTS` limits write and deletion attempts (default 5).
+- **Deletion**: If metadata-filter deletion returns `InvalidArgument`, `Unimplemented`, or `FailedPrecondition`, the service queries the default namespace with an exact `doc_id` filter and deletes the returned identifiers in batches of at most 1,000. Each identifier is deleted once per operation, so stale query results do not repeat deletions. Enumeration stops when no new identifiers appear or after deleting a result with fewer than 1,000 matches, and otherwise fails after 10 rounds. Missing vectors and namespaces are accepted as already deleted.
 - **Purpose**: High-dimensional vector search. Chunks are upserted only into the default namespace (`""`), with `doc_id` metadata identifying each document. Per-document namespaces created by earlier versions are removed when their document is deleted.
 
 ### 3. AWS Bedrock (Embedding and LLM Models)
