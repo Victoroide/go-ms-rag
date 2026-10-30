@@ -111,9 +111,8 @@ Replicas share the PostgreSQL ingestion queue and claim jobs with renewable leas
 
 ## Service Token Rotation
 
-The `SERVICE_TOKEN` environment variable defines the secret expected in the `X-Service-Token` header. To rotate the token in a production deployment without downtime:
+The service accepts any token from `SERVICE_TOKENS` (comma-separated), merged with the optional `SERVICE_TOKEN` value, in the `X-Service-Token` header. Tokens are trimmed and deduplicated at startup; tokens containing whitespace or control characters after trimming prevent startup. Use secrets of at least 32 bytes. To rotate tokens without downtime:
 
-1. **Deploy calling services with dual-token support or phased updating**: Update the calling application to present the new token value, or stage the rotation in coordinated steps.
-2. **Update the microservice environment**: Update the `SERVICE_TOKEN` environment variable on the microservice instance.
-3. **Restart the microservice**: Perform a rolling restart of the microservice. In-flight requests presenting the existing token complete within the graceful shutdown window, while subsequent requests use the new token.
-4. **Verify operations**: Send a probe request with the new token to `POST /query` or `GET /documents` to confirm authentication succeeds.
+1. Add the new token to `SERVICE_TOKENS`, keep the old token configured, and roll the deployment. Wait until every replica accepts both tokens before updating callers.
+2. Move callers to the new token and verify authenticated requests succeed.
+3. Remove the old token from `SERVICE_TOKENS` and `SERVICE_TOKEN`, wherever configured, and roll the deployment again. After all replicas restart, the old token receives `401 Unauthorized`.
