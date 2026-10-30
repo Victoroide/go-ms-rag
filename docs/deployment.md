@@ -43,7 +43,7 @@ The service is packaged using a multi-stage Docker build that outputs a minimal,
 2. **`test`**: Runs static checks (`go vet ./...`) and the short suite with data race instrumentation (`go test -short ./... -count=1 -race`); Docker-backed tests run in full on the host or CI runner.
 3. **`lint`**: Compiles and executes `golangci-lint` (v2.15.0) against `.golangci.yml`.
 4. **`builder`**: Compiles the statically linked binary (`CGO_ENABLED=0 go build -o /bin/server ./cmd/server`).
-5. **`runtime`**: Builds on `alpine:3.23.4`. Installs CA certificates and timezone data, creates a dedicated system user and group (`app`, numeric UID/GID `10001:10001`), copies the compiled server binary containing the embedded migrations, and sets the non-root user as the execution user.
+5. **`runtime`**: Uses the Alpine Linux runtime pinned in the Dockerfile. Installs CA certificates and timezone data, creates a dedicated system user and group (`app`, numeric UID/GID `10001:10001`), copies the compiled server binary containing the embedded migrations, and sets the non-root user as the execution user.
 
 For host verification, `make vet`, `make lint` and `make test` run directly with the local Go toolchain; the full test suite needs a Docker daemon. `make ci` runs those gates in order and then builds the runtime image. The image build's short suite skips Docker-backed database tests, with an explicit daemon requirement message.
 
@@ -86,7 +86,7 @@ In production deployments (`GO_RAG_FAKE_MODE=false`), the microservice connects 
 
 ### 2. Pinecone (Vector Index)
 
-- **Configuration**: `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, and optional `PINECONE_ENVIRONMENT`.
+- **Configuration**: `PINECONE_API_KEY` and an explicit `PINECONE_INDEX_NAME`, for example `quarry-rag`. Both are required when external services are enabled; the index name has no default. `PINECONE_ENVIRONMENT` is ignored and logs a startup warning when non-empty; remove it from deployment configuration.
 - **API Version**: The v5 Go SDK uses Pinecone API version `2025-10`.
 - **Startup Requirements**: The index dimension must equal `EMBEDDING_DIMENSIONS` (default: 1024), the metric must be `cosine`, and the index must be ready. Startup fails if any requirement is unmet.
 - **Request Limits**: Upserts use at most `PINECONE_UPSERT_BATCH_SIZE` records (default 100) and 1.5 MiB of estimated encoded data per batch. `PINECONE_TIMEOUT` bounds each attempt (default 10 seconds), and `PINECONE_MAX_ATTEMPTS` limits write and deletion attempts (default 5).
