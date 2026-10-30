@@ -10,8 +10,10 @@ The table below lists every environment variable parsed by the service:
 |---|---|---|---|---|
 | `SERVER_PORT` | string | `"8081"` | 1 to 65535 | TCP port on which the HTTP server listens. |
 | `AWS_REGION` | string | `""` | Valid AWS region identifier | AWS region used for AWS Bedrock API calls and S3 object storage. Required when `GO_RAG_FAKE_MODE=false`. |
-| `AWS_ACCESS_KEY_ID` | string | `""` | Non-empty string | AWS IAM access key ID. Required when `GO_RAG_FAKE_MODE=false`. |
-| `AWS_SECRET_ACCESS_KEY` | string | `""` | Non-empty string | AWS IAM secret access key. Required when `GO_RAG_FAKE_MODE=false`. |
+| `AWS_ACCESS_KEY_ID` | string | `""` | Set together with `AWS_SECRET_ACCESS_KEY`, or leave both empty | Optional static AWS access key ID. When both keys are empty, AWS clients use the default credential chain. |
+| `AWS_SECRET_ACCESS_KEY` | string | `""` | Set together with `AWS_ACCESS_KEY_ID`, or leave both empty | Optional static AWS secret access key. |
+| `AWS_SESSION_TOKEN` | string | `""` | Optional string | Session token for temporary static AWS credentials. |
+| `AWS_MAX_ATTEMPTS` | integer | `4` | 1 to 10 | Maximum AWS request attempts, including the first attempt. Standard retries have a 10-second maximum backoff, no client-side retry quota, and include `ModelTimeoutException` and `ModelNotReadyException`. |
 | `BEDROCK_EMBED_MODEL` | string | `"amazon.titan-embed-text-v2:0"` | Non-empty string | Bedrock model identifier used for generating text embeddings. |
 | `BEDROCK_PRIMARY_MODEL` | string | `"amazon.nova-micro-v1:0"` | Non-empty string | Bedrock model identifier for low-latency reasoning and fast answer synthesis. |
 | `BEDROCK_FALLBACK_MODEL` | string | `"us.meta.llama4-maverick-17b-instruct-v1:0"` | Non-empty string | Bedrock model identifier for answer synthesis and fallback routing. |
@@ -29,13 +31,14 @@ The table below lists every environment variable parsed by the service:
 | `INGEST_JOB_TIMEOUT` | duration | `15m` | 1m to 2h; greater than lease | Maximum processing time per attempt. |
 | `INGEST_POLL_INTERVAL` | duration | `1s` | 100ms to 1m | Polling interval for ready jobs across replicas. |
 | `EMBED_CONCURRENCY` | integer | `10` | 1 to 50 | Maximum number of concurrent embedding requests dispatched to AWS Bedrock. |
+| `EMBED_TIMEOUT` | duration | `15s` | 1s to 2m | Deadline for each embedding call, including waiting for a concurrency slot and all retries. An earlier caller deadline takes precedence. |
 | `LOCAL_RETRIEVAL_THRESHOLD` | float64 | `0.70` | 0.0 to 1.0 | Cosine similarity threshold for routing single-need queries to LOCAL retrieval mode. |
 | `MAX_CHUNKS_PER_QUERY` | integer | `10` | 1 to 100 | Default and maximum number of chunks returned by the retriever per query. |
 | `MAX_ALLOWED_DOCUMENT_IDS` | integer | `25000` | 1 to 100000 | Maximum allowlist entries per query before deduplication; the 1 MiB query body limit also applies. Vector queries split lists into groups of at most 10000 IDs and merge the top results. |
 | `REQUIRE_DOCUMENT_ALLOWLIST` | boolean | `false` | Boolean | Require a non-null `allowed_document_ids` field on every query; an empty list is accepted and skips embedding and search. |
 | `CHUNK_TOKEN_SIZE` | integer | `512` | 1 to 8192 | Approximate target token size per text chunk in the sliding window chunker. |
 | `CHUNK_OVERLAP` | integer | `64` | >= 0 and < `CHUNK_TOKEN_SIZE` | Number of overlapping tokens retained between consecutive text chunks. |
-| `EMBEDDING_DIMENSIONS` | integer | `1024` | 256, 512, or 1024 | Output vector dimensions requested from Bedrock Titan Embed V2. |
+| `EMBEDDING_DIMENSIONS` | integer | `1024` | 256, 512, or 1024 | Output vector dimensions requested from Bedrock Titan Embed V2. Responses with a different length or non-finite values are rejected. |
 | `S3_BUCKET` | string | `""` | Explicit bucket name | S3 bucket for original uploads. Empty disables source file storage with a startup warning. Startup checks bucket access within 10 seconds; a 403 or 404 prevents startup, while transient errors produce a warning and startup continues. |
 | `S3_EXPECTED_BUCKET_OWNER` | string | `""` | Empty or exactly 12 ASCII digits | Optional AWS account ID expected to own the bucket. Sent with uploads, deletions and bucket checks; omitted from presigned downloads. |
 | `MAX_UPLOAD_BYTES` | int64 | `20971520` (20 MiB) | 1 to 104857600 (100 MiB) | Maximum accepted request payload size for multipart file uploads in bytes. |
