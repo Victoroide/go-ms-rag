@@ -95,7 +95,7 @@ func (e *pdfExtractor) Extract(ctx context.Context, r io.Reader) (result string,
 			separator = 2
 		}
 		if len(cleaned) > domain.MaxContentBytes-buf.Len()-separator {
-			return "", fmt.Errorf("extractor: pdf: extracted text exceeds maximum size of %d bytes", domain.MaxContentBytes)
+			return "", fmt.Errorf("extractor: pdf: maximum text size exceeded: %w", ErrContentTooLarge)
 		}
 		if buf.Len() > 0 {
 			buf.WriteString("\n\n")
@@ -106,7 +106,7 @@ func (e *pdfExtractor) Extract(ctx context.Context, r io.Reader) (result string,
 	result = multiBlankLine.ReplaceAllString(buf.String(), "\n\n")
 	result = strings.TrimSpace(result)
 	if len(result) < 10 {
-		return "", fmt.Errorf("extractor: pdf: no readable text found")
+		return "", fmt.Errorf("extractor: pdf: %w", ErrNoText)
 	}
 	return result, nil
 }

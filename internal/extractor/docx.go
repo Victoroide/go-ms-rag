@@ -58,7 +58,7 @@ func (e *docxExtractor) Extract(ctx context.Context, r io.Reader) (string, error
 		return "", err
 	}
 	if len(text) < 10 {
-		return "", fmt.Errorf("extractor: docx: no readable text found")
+		return "", fmt.Errorf("extractor: docx: %w", ErrNoText)
 	}
 	return text, nil
 }
@@ -73,9 +73,20 @@ func docxPart(zr *zip.Reader, name string) *zip.File {
 }
 
 func docxMainPart(ctx context.Context, zr *zip.Reader) (string, error) {
+	mainPart, err := docxRelatedMainPart(ctx, zr)
+	if err != nil {
+		return "", err
+	}
+	if mainPart == "" {
+		mainPart = "word/document.xml"
+	}
+	return mainPart, nil
+}
+
+func docxRelatedMainPart(ctx context.Context, zr *zip.Reader) (string, error) {
 	part := docxPart(zr, "_rels/.rels")
 	if part == nil {
-		return "word/document.xml", nil
+		return "", nil
 	}
 	if part.UncompressedSize64 > maxDOCXRelationshipsBytes {
 		return "", fmt.Errorf("relationships XML exceeds maximum size of %d bytes", maxDOCXRelationshipsBytes)
@@ -107,7 +118,7 @@ func docxMainPart(ctx context.Context, zr *zip.Reader) (string, error) {
 			return path.Clean(strings.TrimPrefix(relationship.Target, "/")), nil
 		}
 	}
-	return "word/document.xml", nil
+	return "", nil
 }
 
 type docxText struct {

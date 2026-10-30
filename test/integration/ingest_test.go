@@ -320,7 +320,7 @@ func TestIngestUnsupportedFile(t *testing.T) {
 	w := worker.New(cs, nil, nil, worker.Options{})
 	h := handler.IngestHandler(w, cs, nil, 20971520)
 
-	req := createMultipartRequest(t, "data.csv", []byte("col1,col2\nval1,val2"))
+	req := createMultipartRequest(t, "data.bin", []byte{0, 0xff, 0x80, 0})
 	rec := httptest.NewRecorder()
 
 	h.ServeHTTP(rec, req)
