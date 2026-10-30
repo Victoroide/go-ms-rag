@@ -12,6 +12,7 @@ import (
 	"github.com/Victoroide/quarry-rag/internal/llm"
 	"github.com/Victoroide/quarry-rag/internal/pipeline"
 	"github.com/Victoroide/quarry-rag/internal/retriever"
+	pgstore "github.com/Victoroide/quarry-rag/internal/store/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -110,10 +111,14 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 			AllowedDocumentIDs: req.AllowedDocumentIDs,
 		}
 
+		retrieval := pipeline.NewRetrievalStage(ret)
+		if pool != nil {
+			retrieval = pipeline.NewRetrievalStageWithVisibility(ret, pgstore.Visibility{Pool: pool})
+		}
 		stages := []pipeline.QueryStage{
 			pipeline.NewDecomposeStage(pool),
 			pipeline.NewRoutingStage(ret),
-			pipeline.NewRetrievalStage(ret),
+			retrieval,
 			pipeline.NewSynthesisStage(amb, cfg),
 		}
 

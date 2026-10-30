@@ -134,12 +134,18 @@ func (s *RoutingStage) Run(ctx context.Context, qc *QueryContext) error {
 
 // RetrievalStage retrieves chunks from Pinecone using the determined mode.
 type RetrievalStage struct {
-	ret *retriever.Retriever
+	ret        *retriever.Retriever
+	visibility domain.DocumentVisibility
 }
 
 // NewRetrievalStage creates a RetrievalStage.
 func NewRetrievalStage(ret *retriever.Retriever) *RetrievalStage {
 	return &RetrievalStage{ret: ret}
+}
+
+// NewRetrievalStageWithVisibility creates a stage that checks document availability.
+func NewRetrievalStageWithVisibility(ret *retriever.Retriever, vis domain.DocumentVisibility) *RetrievalStage {
+	return &RetrievalStage{ret: ret, visibility: vis}
 }
 
 // ID returns the stage identifier.
@@ -163,10 +169,29 @@ func (s *RetrievalStage) Run(ctx context.Context, qc *QueryContext) error {
 	// Enforce the caller's tenant/role allowlist BEFORE the synthesis stage
 	// runs, so privileged content never reaches the LLM context (and so can
 	// never leak into the generated answer). A nil allowlist is a no-op.
-	qc.RetrievedChunks = filterChunksByAllowedDocIDs(result.Chunks, qc.AllowedDocumentIDs)
-	qc.TopScore = result.TopScore
-	if len(qc.RetrievedChunks) > 0 {
-		qc.TopScore = qc.RetrievedChunks[0].Score
+	chunks := filterChunksByAllowedDocIDs(result.Chunks, qc.AllowedDocumentIDs)
+	qc.RetrievedChunks = nil
+	qc.TopScore = 0
+	if s.visibility != nil && len(chunks) > 0 {
+		ids := make([]string, 0, len(chunks))
+		for _, sc := range chunks {
+			ids = append(ids, string(sc.Chunk.DocumentID))
+		}
+		visible, err := s.visibility.VisibleDocumentIDs(ctx, ids)
+		if err != nil {
+			return fmt.Errorf("retrieval_stage: visibility: %w", err)
+		}
+		filtered := make([]domain.ScoredChunk, 0, len(chunks))
+		for _, sc := range chunks {
+			if _, ok := visible[string(sc.Chunk.DocumentID)]; ok {
+				filtered = append(filtered, sc)
+			}
+		}
+		chunks = filtered
+	}
+	qc.RetrievedChunks = chunks
+	if len(chunks) > 0 {
+		qc.TopScore = chunks[0].Score
 	}
 	return nil
 }
