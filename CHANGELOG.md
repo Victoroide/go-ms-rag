@@ -7,6 +7,8 @@ Notable changes are grouped by release.
 ### Added
 
 - `GET /documents/{doc_id}` reports ingestion status, timestamps and the last error; `GET /documents` accepts `limit` and `after` and reports `status`, `chunk_count` and `created_at`.
+- Use the AWS default credential chain when static keys are not configured, with
+  optional `AWS_SESSION_TOKEN`.
 - JSON and multipart document ingestion with content deduplication, asynchronous
   processing and caller-supplied document identifiers.
 - Text extraction, normalization, semantic chunking and chunk quality metadata.
@@ -19,6 +21,9 @@ Notable changes are grouped by release.
 
 ### Changed
 
+- AWS calls share one retry policy (`AWS_MAX_ATTEMPTS`, no client-side retry
+  quota, `ModelTimeoutException` retried); embedding calls time out after
+  `EMBED_TIMEOUT`.
 - `WORKER_QUEUE_SIZE` limits pending jobs (default 1000); identical in-flight submissions return the existing identifier with 202; resubmitting the content of a failed document retries it; source file upload failures return 503.
 
 - Content deduplication applies only to requests without `document_id`;
@@ -64,6 +69,7 @@ Notable changes are grouped by release.
 
 - `GET /documents` returns an empty array instead of `null` and streams large listings.
 - Preserve superscripts, fractions, circled numbers and text between comparison operators during ingestion; keep carriage-return paragraph breaks; strip HTML only from documents that contain markup.
+- Reject embeddings whose length differs from `EMBEDDING_DIMENSIONS`.
 - Retain source files for caller-owned documents with identical text and after uncertain acceptance results; bound acceptance independently of caller cancellation.
 - Clear existing vectors before each ingestion attempt and again after document deletion; perform terminal cleanup under the live lease before recording failure.
 - Reject NUL characters in document labels before storage.

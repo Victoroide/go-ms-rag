@@ -61,7 +61,9 @@ In production deployments (`GO_RAG_FAKE_MODE=false`), the microservice connects 
 
 ### 3. AWS Bedrock (Embedding and LLM Models)
 
-- **Configuration**: `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and model identifiers (`BEDROCK_EMBED_MODEL`, `BEDROCK_PRIMARY_MODEL`, `BEDROCK_FALLBACK_MODEL`).
+- **Configuration**: `AWS_REGION` and model identifiers (`BEDROCK_EMBED_MODEL`, `BEDROCK_PRIMARY_MODEL`, `BEDROCK_FALLBACK_MODEL`). Static `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are optional and must be configured together; temporary static credentials also accept `AWS_SESSION_TOKEN`.
+- **Credentials**: IAM roles are supported. Without static keys, AWS clients use the default credential chain, including environment credentials, shared configuration files, web identity, container roles and instance roles.
+- **Retries and Deadlines**: Bedrock and S3 use the same retry policy, with `AWS_MAX_ATTEMPTS` attempts (default 4), up to 10 seconds of backoff, no client-side retry quota and retries for `ModelTimeoutException` and `ModelNotReadyException`. Each embedding call has an `EMBED_TIMEOUT` deadline (default 15 seconds), including waiting for a concurrency slot and retries.
 - **Required Model Access**:
   - Titan Embed Text V2 (`amazon.titan-embed-text-v2:0`): generates 1024-dimensional normalized text embeddings.
   - Nova Micro (`amazon.nova-micro-v1:0`): fast, low-latency reasoning and synthesis.
@@ -71,7 +73,7 @@ In production deployments (`GO_RAG_FAKE_MODE=false`), the microservice connects 
 
 - **Configuration**: Set `S3_BUCKET` explicitly to a bucket you control, using the same AWS credentials configured for Bedrock. Set optional `S3_EXPECTED_BUCKET_OWNER` to the owner's 12-digit AWS account ID. An empty bucket disables original file storage and logs a startup warning.
 - **Startup Verification**: Client initialization and `HeadBucket` share a 10-second deadline. Access denied (403), a missing bucket (404), or an expected-owner mismatch prevents startup. Transient errors log a warning and allow startup to continue; an initialized client remains available for later requests.
-- **Purpose**: Stores original binary uploads (PDF, DOCX, DOC) and generates presigned GET download links valid for 15 minutes. Downloads use attachment disposition with the stored filename and an extension-derived content type. Downloaders need no expected-owner header.
+- **Purpose**: Stores original binary uploads (PDF, DOCX, DOC) and generates presigned GET download links valid for up to 15 minutes. A download signed with temporary credentials stops working when those credentials expire, which can be before 15 minutes. Downloads use attachment disposition with the stored filename and an extension-derived content type. Downloaders need no expected-owner header.
 - **IAM Permissions Required**:
   - `s3:PutObject` on `arn:aws:s3:::{bucket}/documents/*`
   - `s3:GetObject` on `arn:aws:s3:::{bucket}/documents/*`
