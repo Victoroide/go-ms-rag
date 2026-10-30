@@ -27,6 +27,7 @@ Notable changes are grouped by release.
 ### Changed
 
 - The offline vector store rejects records the hosted index would reject (metadata above 40 KB, unsupported metadata types, mismatched dimensions).
+- Use Pinecone API version 2025-10 through the v5 Go SDK; namespace operations share one connection.
 - LOCAL retrieval draws evidence from the routed document (named entity or best match) and tops up from the authorized scope when it has fewer than 3 matching chunks; explicit `global` skips the routing probe.
 - Query failures return 504, 503 (with `Retry-After`) or 502 with generic messages; responses report `finish_reason`; HTTP server timeouts are configurable.
 
