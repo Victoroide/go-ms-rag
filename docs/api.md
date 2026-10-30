@@ -317,7 +317,7 @@ Deletes a document and all related artifacts across Pinecone, S3, and PostgreSQL
 - **Request Body**: None
 
 Deletion ordering:
-1. Deletes all vector entries in the Pinecone document namespace (`doc_id`).
+1. Removes the legacy Pinecone document namespace (`doc_id`) when present.
 2. Deletes vector entries in the Pinecone default namespace where metadata `doc_id` matches.
 3. Deletes the original uploaded file from S3 if an `s3_key` exists.
 4. Deletes the document record from PostgreSQL (cascading foreign keys remove rows in `chunks` and `document_fingerprints`).

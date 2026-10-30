@@ -120,8 +120,7 @@ sequenceDiagram
     Pipeline->>Embedder: EmbedStage (generate chunk embeddings)
     Embedder-->>Pipeline: Vector embeddings
 
-    Pipeline->>Pinecone: PersistStage: Upsert vectors to doc_id namespace
-    Pipeline->>Pinecone: PersistStage: Upsert vectors to default namespace
+    Pipeline->>Pinecone: PersistStage: Upsert vectors to default namespace with doc_id metadata
     Pipeline->>Postgres: PersistStage: Insert document record
     Pipeline->>Postgres: PersistStage: Insert chunk records (transaction)
     Pipeline->>Postgres: PersistStage: Store fingerprint
@@ -140,8 +139,7 @@ sequenceDiagram
 3. **PersistStage**:
    - Assigns the caller's `doc_type` or falls back to the default `"document"`.
    - Injects `doc_type` into metadata for both document and individual chunk records.
-   - Upserts vectors into Pinecone under a dedicated document namespace (`doc_id`).
-   - Upserts vectors into Pinecone under the default namespace (`""`) to support global queries.
+   - Upserts vectors into Pinecone only under the default namespace (`""`), with `doc_id` metadata identifying each document.
    - Inserts the document record into PostgreSQL, storing the full text, metadata, and an initial 120-rune text preview.
    - Inserts chunk metadata records into PostgreSQL inside a database transaction.
    - Records the SHA-256 content fingerprint in PostgreSQL.

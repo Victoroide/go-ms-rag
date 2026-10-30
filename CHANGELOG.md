@@ -18,6 +18,8 @@ Notable changes are grouped by release.
 
 ### Changed
 
+- New documents are indexed only in the default vector namespace; per-document
+  namespaces created by earlier versions are still removed on deletion.
 - Document labels default to `document` when omitted and are never inferred from
   content; migration 005 changes the database default without relabelling rows.
 - Evidence-backed answers follow the question's language. Empty authorized

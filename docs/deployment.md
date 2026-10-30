@@ -50,7 +50,7 @@ In production deployments (`GO_RAG_FAKE_MODE=false`), the microservice connects 
 - **Configuration**: `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, and optional `PINECONE_ENVIRONMENT`.
 - **Index Dimensions**: Must match `EMBEDDING_DIMENSIONS` (default: 1024).
 - **Metric**: Cosine similarity.
-- **Purpose**: High-dimensional vector search. Chunks are upserted into both a document-specific namespace (named after the document UUID) and the default namespace (`""`) to enable targeted and corpus-wide retrieval.
+- **Purpose**: High-dimensional vector search. Chunks are upserted only into the default namespace (`""`), with `doc_id` metadata identifying each document. Per-document namespaces created by earlier versions are removed when their document is deleted.
 
 ### 3. AWS Bedrock (Embedding and LLM Models)
 

@@ -45,7 +45,7 @@ func TestPersistOpaqueDocumentType(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, want, doc.Metadata["doc_type"])
 			require.True(t, utf8.ValidString(doc.ContentPreview))
-			chunks, err := vs.Query(t.Context(), "doc", []float32{1}, 10, want)
+			chunks, err := vs.Query(t.Context(), "", []float32{1}, 10, want)
 			require.NoError(t, err)
 			require.Len(t, chunks, 1)
 		})
