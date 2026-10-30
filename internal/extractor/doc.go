@@ -28,7 +28,10 @@ func (e *docExtractor) Extract(ctx context.Context, r io.Reader) (string, error)
 	var wordData []byte
 	for entry, err := doc.Next(); err == nil; entry, err = doc.Next() {
 		if entry.Name == "WordDocument" {
-			wordData, err = io.ReadAll(entry)
+			if entry.Size <= 0 || entry.Size > int64(len(data)) {
+				return "", fmt.Errorf("extractor: doc: WordDocument stream size exceeds the file size")
+			}
+			wordData, err = io.ReadAll(io.LimitReader(contextReader{ctx: ctx, reader: entry}, entry.Size))
 			if err != nil {
 				return "", fmt.Errorf("extractor: doc: read WordDocument stream: %w", err)
 			}
@@ -42,6 +45,9 @@ func (e *docExtractor) Extract(ctx context.Context, r io.Reader) (string, error)
 
 	text := extractPrintableText(wordData)
 	text = strings.TrimSpace(text)
+	if err := checkTextLimit(len(text)); err != nil {
+		return "", err
+	}
 	if len(text) < 10 {
 		return "", fmt.Errorf("extractor: doc: no readable text found")
 	}

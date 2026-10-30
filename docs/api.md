@@ -143,7 +143,7 @@ Error Status Codes:
 | `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
 | `413 Payload Too Large` | `validation` | Upload exceeds `MAX_UPLOAD_BYTES` |
 | `415 Unsupported Media Type` | `validation` | Uploaded file extension is not pdf, docx, or doc |
-| `422 Unprocessable Entity` | `extraction` | Document text extraction failed (e.g., malformed binary structure or expanded DOCX XML exceeding 16 MiB, PDF text exceeding 1,000,000 bytes, or PDF extraction work exceeding its limits) |
+| `422 Unprocessable Entity` | `extraction` | Document text extraction failed (e.g., malformed binary structure, extracted PDF, DOCX, DOC or text exceeding 1,000,000 bytes, expanded DOCX XML exceeding 16 MiB, a DOC stream declaring a size larger than the file, or PDF extraction work exceeding its limits) |
 | `503 Service Unavailable` | `queue` | Ingest worker channel queue is full; rolls back S3 object if uploaded |
 
 Example:

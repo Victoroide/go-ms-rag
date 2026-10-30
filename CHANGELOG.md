@@ -71,6 +71,8 @@ Notable changes are grouped by release.
   expected owner at startup, and send the expected owner on storage writes.
 - Exclude chunks of deleted, failed and unfinished documents from query results
   and answer generation.
+- Reject DOCX, DOC and text extractions above 1,000,000 bytes and bound legacy DOC
+  stream reads to the uploaded file size.
 - Service token authentication for document and query routes, with startup checks
   that reject missing tokens outside offline mode.
 - Document allowlists applied before answer generation for restricted queries.
