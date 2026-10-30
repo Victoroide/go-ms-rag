@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Victoroide/quarry-rag/internal/api/handler"
 	"github.com/Victoroide/quarry-rag/internal/chunker"
@@ -24,6 +26,8 @@ import (
 
 // mockChunkStore implements domain.ChunkStore for testing.
 type mockChunkStore struct {
+	mu           sync.Mutex
+	jobs         []domain.Job
 	documents    map[string]domain.Document
 	chunks       map[string]domain.Chunk
 	fingerprints map[string]string
@@ -38,11 +42,15 @@ func newMockChunkStore() *mockChunkStore {
 }
 
 func (m *mockChunkStore) InsertDocument(_ context.Context, doc domain.Document) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.documents[string(doc.ID)] = doc
 	return nil
 }
 
 func (m *mockChunkStore) InsertChunks(_ context.Context, chunks []domain.Chunk) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, c := range chunks {
 		m.chunks[string(c.ID)] = c
 	}
@@ -50,6 +58,8 @@ func (m *mockChunkStore) InsertChunks(_ context.Context, chunks []domain.Chunk) 
 }
 
 func (m *mockChunkStore) GetDocument(_ context.Context, id domain.DocumentID) (*domain.Document, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	doc, ok := m.documents[string(id)]
 	if !ok {
 		return nil, nil
@@ -58,6 +68,8 @@ func (m *mockChunkStore) GetDocument(_ context.Context, id domain.DocumentID) (*
 }
 
 func (m *mockChunkStore) CheckFingerprint(_ context.Context, fp string) (domain.DocumentID, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	docID, ok := m.fingerprints[fp]
 	if !ok {
 		return "", false, nil
@@ -66,11 +78,15 @@ func (m *mockChunkStore) CheckFingerprint(_ context.Context, fp string) (domain.
 }
 
 func (m *mockChunkStore) StoreFingerprint(_ context.Context, fp, docID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.fingerprints[fp] = docID
 	return nil
 }
 
 func (m *mockChunkStore) GetDocumentS3Key(_ context.Context, id domain.DocumentID) (*string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	doc, ok := m.documents[string(id)]
 	if !ok {
 		return nil, nil
@@ -79,6 +95,8 @@ func (m *mockChunkStore) GetDocumentS3Key(_ context.Context, id domain.DocumentI
 }
 
 func (m *mockChunkStore) UpdateDocumentStatus(_ context.Context, id domain.DocumentID, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if doc, ok := m.documents[string(id)]; ok {
 		doc.Metadata = map[string]any{"status": status}
 		m.documents[string(id)] = doc
@@ -87,11 +105,15 @@ func (m *mockChunkStore) UpdateDocumentStatus(_ context.Context, id domain.Docum
 }
 
 func (m *mockChunkStore) DeleteDocument(_ context.Context, id domain.DocumentID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.documents, string(id))
 	return nil
 }
 
 func (m *mockChunkStore) ListDocuments(_ context.Context) ([]domain.DocumentRef, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	out := make([]domain.DocumentRef, 0, len(m.documents))
 	for id, doc := range m.documents {
 		ref := domain.DocumentRef{ID: id, S3Key: doc.S3Key}
@@ -144,11 +166,11 @@ func TestIngestEndToEnd(t *testing.T) {
 
 	stages := []pipeline.Stage{
 		pipeline.NewChunkStage(chk),
-		pipeline.NewEmbedStage(emb),
-		pipeline.NewPersistStage(vs, cs),
+		pipeline.NewEmbedStage(emb, 2),
+		pipeline.NewPersistStage(vs),
 	}
 
-	w := worker.NewWorker(10, stages, cs)
+	w := worker.New(cs, stages, nil, worker.Options{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w.Start(ctx)
@@ -180,11 +202,11 @@ func TestIngestDedup(t *testing.T) {
 
 	stages := []pipeline.Stage{
 		pipeline.NewChunkStage(chk),
-		pipeline.NewEmbedStage(emb),
-		pipeline.NewPersistStage(vs, cs),
+		pipeline.NewEmbedStage(emb, 2),
+		pipeline.NewPersistStage(vs),
 	}
 
-	w := worker.NewWorker(10, stages, cs)
+	w := worker.New(cs, stages, nil, worker.Options{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w.Start(ctx)
@@ -266,11 +288,11 @@ func TestIngestDOCXFile(t *testing.T) {
 
 	stages := []pipeline.Stage{
 		pipeline.NewChunkStage(chk),
-		pipeline.NewEmbedStage(emb),
-		pipeline.NewPersistStage(vs, cs),
+		pipeline.NewEmbedStage(emb, 2),
+		pipeline.NewPersistStage(vs),
 	}
 
-	w := worker.NewWorker(10, stages, cs)
+	w := worker.New(cs, stages, nil, worker.Options{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w.Start(ctx)
@@ -295,7 +317,7 @@ func TestIngestDOCXFile(t *testing.T) {
 
 func TestIngestUnsupportedFile(t *testing.T) {
 	cs := newMockChunkStore()
-	w := worker.NewWorker(10, nil, cs)
+	w := worker.New(cs, nil, nil, worker.Options{})
 	h := handler.IngestHandler(w, cs, nil, 20971520)
 
 	req := createMultipartRequest(t, "data.csv", []byte("col1,col2\nval1,val2"))
@@ -311,7 +333,7 @@ func TestIngestUnsupportedFile(t *testing.T) {
 
 func TestIngestFileTooLarge(t *testing.T) {
 	cs := newMockChunkStore()
-	w := worker.NewWorker(10, nil, cs)
+	w := worker.New(cs, nil, nil, worker.Options{})
 	// Set max to 100 bytes for this test.
 	h := handler.IngestHandler(w, cs, nil, 100)
 
@@ -366,4 +388,65 @@ func TestDetectFileTypeIntegration(t *testing.T) {
 
 	_, err = extractor.DetectFileType("data.csv")
 	assert.Error(t, err)
+}
+
+func (m *mockChunkStore) AcceptDocument(_ context.Context, r domain.AcceptRequest) (domain.AcceptResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := domain.AcceptResult{DocumentID: r.Document.ID, Outcome: domain.AcceptAccepted}
+	if !r.CallerSupplied {
+		if id, ok := m.fingerprints[r.Fingerprint]; ok {
+			result.DocumentID = domain.DocumentID(id)
+			result.Outcome = domain.AcceptDuplicate
+			return result, nil
+		}
+	}
+	if doc, ok := m.documents[string(r.Document.ID)]; ok {
+		result.Outcome = domain.AcceptDuplicate
+		if chunker.Fingerprint(doc.Content) != r.Fingerprint {
+			result.Outcome = domain.AcceptConflict
+		}
+		return result, nil
+	}
+	m.documents[string(r.Document.ID)] = r.Document
+	m.fingerprints[r.Fingerprint] = string(r.Document.ID)
+	m.jobs = append(m.jobs, domain.Job{Document: r.Document, DocType: r.DocType, Attempts: 1})
+	return result, nil
+}
+func (m *mockChunkStore) ClaimJob(_ context.Context, owner string, _ time.Duration, _ int) (*domain.Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.jobs) == 0 {
+		return nil, nil
+	}
+	j := m.jobs[0]
+	m.jobs = m.jobs[1:]
+	j.LeaseOwner = owner
+	return &j, nil
+}
+func (*mockChunkStore) HeartbeatJob(context.Context, domain.Job, time.Duration) (bool, error) {
+	return true, nil
+}
+func (m *mockChunkStore) CompleteJob(_ context.Context, j domain.Job, chunks []domain.Chunk) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	doc, ok := m.documents[string(j.Document.ID)]
+	if !ok {
+		return false, nil
+	}
+	doc.ChunkCount = len(chunks)
+	m.documents[string(doc.ID)] = doc
+	for _, ch := range chunks {
+		m.chunks[string(ch.ID)] = ch
+	}
+	return true, nil
+}
+func (*mockChunkStore) RetryJob(context.Context, domain.Job, time.Duration, string) error { return nil }
+func (*mockChunkStore) FailJob(context.Context, domain.Job, string) error                 { return nil }
+func (*mockChunkStore) ReleaseJob(context.Context, domain.Job) error                      { return nil }
+func (m *mockChunkStore) DocumentExists(_ context.Context, id domain.DocumentID) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.documents[string(id)]
+	return ok, nil
 }

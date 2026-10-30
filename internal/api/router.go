@@ -40,7 +40,7 @@ func NewRouter(deps *RouterDeps) http.Handler {
 	// and must never be reachable without the trusted caller in front of it.
 	tok := deps.Config.ServiceToken
 	middleware.LogServiceAuthState(tok)
-	ingestOpts := []handler.IngestOption{handler.WithUploadLimiter(extractor.NewLimiter(deps.Config.ExtractConcurrency, deps.Config.ExtractQueueTimeout))}
+	ingestOpts := []handler.IngestOption{handler.WithMaxPending(deps.Config.WorkerQueueSize), handler.WithUploadLimiter(extractor.NewLimiter(deps.Config.ExtractConcurrency, deps.Config.ExtractQueueTimeout))}
 	if deps.Config.ExtractIsolation {
 		sb, err := extractor.NewSandbox(extractor.SandboxConfig{Timeout: deps.Config.ExtractTimeout, MemoryLimitMB: deps.Config.ExtractMemoryLimitMB})
 		if err != nil {
@@ -53,7 +53,11 @@ func NewRouter(deps *RouterDeps) http.Handler {
 		}
 	}
 	mux.HandleFunc("GET /health", handler.HealthHandler(deps.VectorStore, deps.ChunkStore, deps.S3Client))
-	mux.HandleFunc("POST /ingest", middleware.RequireServiceToken(tok, handler.IngestHandler(deps.Worker, deps.ChunkStore, deps.S3Client, deps.Config.MaxUploadBytes, ingestOpts...)))
+	var objects handler.ObjectStore
+	if deps.S3Client != nil {
+		objects = deps.S3Client
+	}
+	mux.HandleFunc("POST /ingest", middleware.RequireServiceToken(tok, handler.IngestHandler(deps.Worker, deps.ChunkStore, objects, deps.Config.MaxUploadBytes, ingestOpts...)))
 	mux.HandleFunc("POST /query", middleware.RequireServiceToken(tok, handler.QueryHandler(deps.Retriever, deps.Ambassador, deps.Config, deps.PGPool)))
 	mux.HandleFunc("GET /documents", middleware.RequireServiceToken(tok, handler.ListDocumentsHandler(deps.ChunkStore)))
 	mux.HandleFunc("GET /documents/{doc_id}/file", middleware.RequireServiceToken(tok, handler.FileHandler(deps.ChunkStore, deps.S3Client)))

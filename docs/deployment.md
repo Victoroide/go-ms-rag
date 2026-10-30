@@ -101,11 +101,13 @@ The service handles graceful shutdown when receiving `SIGINT` or `SIGTERM`:
 
 1. Stops accepting new inbound HTTP requests.
 2. Drains active HTTP requests with a 15-second deadline.
-3. Closes the ingestion worker queue and drains buffered ingest tasks with a 15-second deadline.
+3. Stops ingestion claims and waits up to 15 seconds for active jobs, then cancels them and releases their leases within a detached 5-second deadline. Pending jobs remain in PostgreSQL.
 4. Closes active Pinecone index client connections.
 5. Closes the PostgreSQL connection pool.
 
-Ensure container orchestrators configure a termination grace period of at least 35 seconds to allow HTTP requests, worker drain and the bounded five-second failure-status update to settle before sending `SIGKILL`.
+Ensure container orchestrators configure a termination grace period of at least 35 seconds to allow HTTP requests, worker completion and the bounded five-second lease release to settle before sending `SIGKILL`.
+
+Replicas share the PostgreSQL ingestion queue and claim jobs with renewable leases. Accepted content survives restarts. Graceful shutdown releases unfinished leases without consuming an attempt; after abrupt termination, another replica reclaims expired leases. No pending document is dropped.
 
 ---
 

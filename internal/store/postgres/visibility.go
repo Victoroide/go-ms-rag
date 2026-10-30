@@ -34,12 +34,8 @@ func (v Visibility) VisibleDocumentIDs(ctx context.Context, ids []string) (map[s
 		return visible, nil
 	}
 
-	// Legacy processing rows with a fingerprint were persisted before a lost
-	// final status write. Remove this clause after normalizing them to completed.
 	rows, err := v.Pool.Query(ctx, `SELECT d.id::text FROM documents d
-		WHERE d.id = ANY($1::uuid[]) AND (d.status = 'completed' OR
-		(d.status = 'processing' AND EXISTS (
-			SELECT 1 FROM document_fingerprints f WHERE f.document_id = d.id)))`, queryIDs)
+        WHERE d.id = ANY($1::uuid[]) AND d.status = 'completed'`, queryIDs)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: visible documents: %w", err)
 	}

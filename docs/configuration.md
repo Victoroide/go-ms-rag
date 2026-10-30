@@ -22,7 +22,12 @@ The table below lists every environment variable parsed by the service:
 | `PINECONE_TIMEOUT` | duration | `10s` | 1s to 2m | Timeout for each vector index request attempt. |
 | `PINECONE_MAX_ATTEMPTS` | integer | `5` | 1 to 10 | Maximum vector write and deletion attempts, including the first attempt; queries use at most three attempts. |
 | `DATABASE_URL` | string | `""` | Valid PostgreSQL connection string | PostgreSQL connection string for document metadata and chunk storage. Always required in all modes. Defaults to 16 pooled connections and a 30-second statement timeout; override with `pool_max_conns` and `statement_timeout`. |
-| `WORKER_QUEUE_SIZE` | integer | `100` | 1 to 1000 | In-memory buffered channel capacity for the background ingestion worker. |
+| `WORKER_QUEUE_SIZE` | integer | `1000` | 1 to 100000 | Maximum outstanding persisted ingestion jobs across replicas, including running jobs. |
+| `INGEST_WORKERS` | integer | `2` | 1 to 32 | Parallel document claim loops per replica. |
+| `INGEST_MAX_ATTEMPTS` | integer | `5` | 1 to 20 | Maximum processing attempts before recording terminal failure. |
+| `INGEST_LEASE` | duration | `2m` | 30s to 30m | Lease duration, renewed every third of this interval. |
+| `INGEST_JOB_TIMEOUT` | duration | `15m` | 1m to 2h; greater than lease | Maximum processing time per attempt. |
+| `INGEST_POLL_INTERVAL` | duration | `1s` | 100ms to 1m | Polling interval for ready jobs across replicas. |
 | `EMBED_CONCURRENCY` | integer | `10` | 1 to 50 | Maximum number of concurrent embedding requests dispatched to AWS Bedrock. |
 | `LOCAL_RETRIEVAL_THRESHOLD` | float64 | `0.70` | 0.0 to 1.0 | Cosine similarity threshold for routing single-need queries to LOCAL retrieval mode. |
 | `MAX_CHUNKS_PER_QUERY` | integer | `10` | 1 to 100 | Default and maximum number of chunks returned by the retriever per query. |
@@ -60,3 +65,4 @@ Application connections default to `pool_max_conns=16` and `statement_timeout=30
 | `003_add_content_preview.sql` | Adds the `content_preview` column to `documents`, backfills existing rows with the first 120 characters of `content`, and creates a functional index on `LOWER(content_preview)`. |
 | `004_add_doc_type.sql` | Adds the `doc_type` column to `documents` and backfills values from `metadata->>'doc_type'`. |
 | `005_document_default.sql` | Sets the default column value for `doc_type` in `documents` to `'document'`. |
+| `006_ingest_jobs.sql` | Adds durable ingestion jobs, lease and failure tracking, completion timestamps and document fingerprints. Normalizes previously persisted processing rows with fingerprints to completed and requeues other processing rows. |

@@ -42,6 +42,11 @@ func Remove(ctx context.Context, cs domain.ChunkStore, vectors domain.VectorDele
 	if err := cs.DeleteDocument(ctx, doc.ID); err != nil {
 		return fmt.Errorf("delete document metadata: %w", err)
 	}
+	if vectors != nil {
+		if err := vectors.DeleteByDocID(ctx, string(doc.ID)); err != nil && status.Code(err) != codes.NotFound {
+			return fmt.Errorf("delete document vectors after metadata: %w", err)
+		}
+	}
 	return nil
 }
 

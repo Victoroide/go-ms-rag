@@ -46,7 +46,7 @@ func TestVisibilityRules(t *testing.T) {
 	vis := pgstore.Visibility{Pool: client.Pool}
 	got, err := vis.VisibleDocumentIDs(t.Context(), []string{completed, strings.ToUpper(completed), completed, legacy, processing, failed, missing, "malformed", ""})
 	require.NoError(t, err)
-	require.Equal(t, map[string]struct{}{completed: {}, legacy: {}}, got)
+	require.Equal(t, map[string]struct{}{completed: {}}, got)
 	for _, ids := range [][]string{nil, {}, {"malformed", ""}} {
 		got, err = (pgstore.Visibility{}).VisibleDocumentIDs(t.Context(), ids)
 		require.NoError(t, err)
