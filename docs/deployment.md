@@ -33,6 +33,12 @@ docker run -d \
 
 ---
 
+## Document Extraction Processes
+
+Each concurrent multipart upload starts at most one extraction child process. The service binary must be able to execute itself; the runtime filesystem and process policy must allow this. `EXTRACT_CONCURRENCY` defaults to two, and a slot is held while the upload is read as well as while its document is parsed.
+
+Size container memory to at least `base + EXTRACT_CONCURRENCY × EXTRACT_MEMORY_LIMIT_MB`, where `base` covers the server, buffered uploads and background ingestion. The child memory setting is a soft Go limit; allow additional headroom for runtime overhead and temporary allocations. Each child has a 64 MiB maximum stack and a 30-second default wall-clock timeout. On Linux it attempts to set `oom_score_adj=1000` so that memory pressure preferentially terminates the parser. Failure to execute a child makes document uploads return HTTP 503.
+
 ## Required External Services
 
 In production deployments (`GO_RAG_FAKE_MODE=false`), the microservice connects to four external cloud services, configured via environment variables.

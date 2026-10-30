@@ -32,6 +32,11 @@ The table below lists every environment variable parsed by the service:
 | `S3_BUCKET` | string | `""` | Explicit bucket name | S3 bucket for original uploads. Empty disables source file storage with a startup warning. Startup checks bucket access within 10 seconds; a 403 or 404 prevents startup, while transient errors produce a warning and startup continues. |
 | `S3_EXPECTED_BUCKET_OWNER` | string | `""` | Empty or exactly 12 ASCII digits | Optional AWS account ID expected to own the bucket. Sent with uploads, deletions and bucket checks; omitted from presigned downloads. |
 | `MAX_UPLOAD_BYTES` | int64 | `20971520` (20 MiB) | 1 to 104857600 (100 MiB) | Maximum accepted request payload size for multipart file uploads in bytes. |
+| `EXTRACT_ISOLATION` | boolean | `true` | Boolean | Extract PDF, DOCX and DOC text in a separate process. Disabling this removes crash isolation and the child process limits. |
+| `EXTRACT_TIMEOUT` | duration | `30s` | 1s to 10m | Maximum wall-clock time for each isolated extraction. |
+| `EXTRACT_CONCURRENCY` | integer | `2` | 1 to 64 | Maximum concurrent multipart handlers, including upload reads and extraction. |
+| `EXTRACT_MEMORY_LIMIT_MB` | integer | `512` | 64 to 8192 | Soft Go memory limit per extraction child in MiB. This is not a hard process memory cap. |
+| `EXTRACT_QUEUE_TIMEOUT` | duration | `5s` | 0s to 60s | Maximum wait for an upload slot; zero rejects immediately when full. |
 | `SYNTHESIS_MODEL` | string | `"fallback"` | `"primary"`, `"fallback"`, or `"hybrid"` | Model routing policy for query answer synthesis: `"fallback"` uses Llama 4 Maverick, `"primary"` uses Nova Micro, and `"hybrid"` dynamically selects between models based on query complexity. |
 | `GO_RAG_FAKE_MODE` | boolean | `false` | Boolean (`true`, `false`, `1`, `0`) | Runs the service in offline fake mode using an in-memory vector store and mock model generators without AWS or Pinecone credentials. Never enable in production deployments. |
 | `SERVICE_TOKEN` | string | `""` | Non-empty string in real mode | Shared secret token expected in the `X-Service-Token` header on protected endpoints. Required when `GO_RAG_FAKE_MODE=false`. |

@@ -59,6 +59,12 @@ type Config struct {
 	PineconeUpsertBatchSize int
 	PineconeTimeout         time.Duration
 	PineconeMaxAttempts     int
+
+	ExtractIsolation     bool
+	ExtractTimeout       time.Duration
+	ExtractConcurrency   int
+	ExtractMemoryLimitMB int
+	ExtractQueueTimeout  time.Duration
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -91,6 +97,7 @@ func Load() (*Config, error) {
 		{"CHUNK_OVERLAP", &cfg.ChunkOverlap, 64}, {"EMBEDDING_DIMENSIONS", &cfg.EmbeddingDimensions, 1024},
 		{"PINECONE_UPSERT_BATCH_SIZE", &cfg.PineconeUpsertBatchSize, 100},
 		{"PINECONE_MAX_ATTEMPTS", &cfg.PineconeMaxAttempts, 5},
+		{"EXTRACT_CONCURRENCY", &cfg.ExtractConcurrency, 2}, {"EXTRACT_MEMORY_LIMIT_MB", &cfg.ExtractMemoryLimitMB, 512},
 	} {
 		value, err := envIntOrDefault(setting.key, setting.fallback)
 		if err != nil {
@@ -109,6 +116,15 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.FakeMode, err = envBoolOrDefault("GO_RAG_FAKE_MODE", false); err != nil {
+		return nil, err
+	}
+	if cfg.ExtractIsolation, err = envBoolOrDefault("EXTRACT_ISOLATION", true); err != nil {
+		return nil, err
+	}
+	if cfg.ExtractTimeout, err = envDurationOrDefault("EXTRACT_TIMEOUT", 30*time.Second); err != nil {
+		return nil, err
+	}
+	if cfg.ExtractQueueTimeout, err = envDurationOrDefault("EXTRACT_QUEUE_TIMEOUT", 5*time.Second); err != nil {
 		return nil, err
 	}
 
@@ -198,6 +214,18 @@ func (c *Config) validate() error {
 		if len(c.S3ExpectedBucketOwner) != 12 || strings.IndexFunc(c.S3ExpectedBucketOwner, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
 			return fmt.Errorf("config: S3_EXPECTED_BUCKET_OWNER must contain exactly 12 digits")
 		}
+	}
+	if c.ExtractTimeout < time.Second || c.ExtractTimeout > 10*time.Minute {
+		return fmt.Errorf("config: EXTRACT_TIMEOUT must be between 1s and 10m")
+	}
+	if c.ExtractConcurrency < 1 || c.ExtractConcurrency > 64 {
+		return fmt.Errorf("config: EXTRACT_CONCURRENCY must be between 1 and 64")
+	}
+	if c.ExtractMemoryLimitMB < 64 || c.ExtractMemoryLimitMB > 8192 {
+		return fmt.Errorf("config: EXTRACT_MEMORY_LIMIT_MB must be between 64 and 8192")
+	}
+	if c.ExtractQueueTimeout < 0 || c.ExtractQueueTimeout > time.Minute {
+		return fmt.Errorf("config: EXTRACT_QUEUE_TIMEOUT must be between 0s and 60s")
 	}
 	return nil
 }

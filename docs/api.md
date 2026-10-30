@@ -163,6 +163,9 @@ Error Status Codes:
 | `413 Payload Too Large` | `validation` | Upload exceeds `MAX_UPLOAD_BYTES` |
 | `415 Unsupported Media Type` | `validation` | Uploaded file extension is not pdf, docx, or doc |
 | `422 Unprocessable Entity` | `extraction` | Document text extraction failed (e.g., malformed binary structure, extracted PDF, DOCX, DOC or text exceeding 1,000,000 bytes, expanded DOCX XML exceeding 16 MiB, a DOC stream declaring a size larger than the file, or PDF extraction work exceeding its limits) |
+| `422 Unprocessable Entity` | `extraction` | Isolated parser failure: `document could not be parsed`; extraction timeout: `document extraction exceeded the time limit` |
+| `503 Service Unavailable` | `busy` | All upload slots remain occupied beyond `EXTRACT_QUEUE_TIMEOUT`: `too many concurrent uploads`, with `Retry-After: 5` |
+| `503 Service Unavailable` | `extraction` | The extraction child cannot be started: `document extraction is unavailable` |
 | `503 Service Unavailable` | `queue` | Ingest worker channel queue is full; rolls back S3 object if uploaded |
 | `503 Service Unavailable` | `unavailable` | Document or fingerprint lookup failed |
 

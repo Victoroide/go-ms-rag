@@ -2,12 +2,15 @@
 package api
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/Victoroide/quarry-rag/internal/api/handler"
 	"github.com/Victoroide/quarry-rag/internal/api/middleware"
 	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/Victoroide/quarry-rag/internal/domain"
+	"github.com/Victoroide/quarry-rag/internal/extractor"
 	"github.com/Victoroide/quarry-rag/internal/llm"
 	"github.com/Victoroide/quarry-rag/internal/retriever"
 	s3store "github.com/Victoroide/quarry-rag/internal/store/s3"
@@ -37,8 +40,20 @@ func NewRouter(deps *RouterDeps) http.Handler {
 	// and must never be reachable without the trusted caller in front of it.
 	tok := deps.Config.ServiceToken
 	middleware.LogServiceAuthState(tok)
+	ingestOpts := []handler.IngestOption{handler.WithUploadLimiter(extractor.NewLimiter(deps.Config.ExtractConcurrency, deps.Config.ExtractQueueTimeout))}
+	if deps.Config.ExtractIsolation {
+		sb, err := extractor.NewSandbox(extractor.SandboxConfig{Timeout: deps.Config.ExtractTimeout, MemoryLimitMB: deps.Config.ExtractMemoryLimitMB})
+		if err != nil {
+			slog.Error("initialize document extraction", "error", err)
+			ingestOpts = append(ingestOpts, handler.WithExtractor(func(context.Context, extractor.FileType, []byte) (string, error) {
+				return "", extractor.ErrExtractionUnavailable
+			}))
+		} else {
+			ingestOpts = append(ingestOpts, handler.WithExtractor(sb.Extract))
+		}
+	}
 	mux.HandleFunc("GET /health", handler.HealthHandler(deps.VectorStore, deps.ChunkStore, deps.S3Client))
-	mux.HandleFunc("POST /ingest", middleware.RequireServiceToken(tok, handler.IngestHandler(deps.Worker, deps.ChunkStore, deps.S3Client, deps.Config.MaxUploadBytes)))
+	mux.HandleFunc("POST /ingest", middleware.RequireServiceToken(tok, handler.IngestHandler(deps.Worker, deps.ChunkStore, deps.S3Client, deps.Config.MaxUploadBytes, ingestOpts...)))
 	mux.HandleFunc("POST /query", middleware.RequireServiceToken(tok, handler.QueryHandler(deps.Retriever, deps.Ambassador, deps.Config, deps.PGPool)))
 	mux.HandleFunc("GET /documents", middleware.RequireServiceToken(tok, handler.ListDocumentsHandler(deps.ChunkStore)))
 	mux.HandleFunc("GET /documents/{doc_id}/file", middleware.RequireServiceToken(tok, handler.FileHandler(deps.ChunkStore, deps.S3Client)))

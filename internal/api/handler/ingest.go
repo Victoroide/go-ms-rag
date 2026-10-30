@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -50,11 +51,17 @@ func validateIngestRequest(req *IngestRequest) *APIError {
 // Supports two content types:
 //   - application/json: existing JSON body with "content" field
 //   - multipart/form-data: file upload with text extraction
-func IngestHandler(wk *worker.Worker, cs domain.ChunkStore, s3Client *s3store.Client, maxUploadBytes int64) http.HandlerFunc {
+func IngestHandler(wk *worker.Worker, cs domain.ChunkStore, s3Client *s3store.Client, maxUploadBytes int64, opts ...IngestOption) http.HandlerFunc {
+	options := ingestOptions{extract: func(ctx context.Context, ft extractor.FileType, data []byte) (string, error) {
+		return extractor.New(ft).Extract(ctx, bytes.NewReader(data))
+	}}
+	for _, opt := range opts {
+		opt(&options)
+	}
 	return func(rw http.ResponseWriter, r *http.Request) {
 		ct := r.Header.Get("Content-Type")
 		if strings.HasPrefix(ct, "multipart/form-data") {
-			handleFileIngest(rw, r, wk, cs, s3Client, maxUploadBytes)
+			handleFileIngest(rw, r, wk, cs, s3Client, maxUploadBytes, options)
 			return
 		}
 		handleJSONIngest(rw, r, wk, cs)
@@ -104,7 +111,16 @@ func handleJSONIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 	}
 }
 
-func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker, cs domain.ChunkStore, s3Client *s3store.Client, maxUploadBytes int64) {
+func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker, cs domain.ChunkStore, s3Client *s3store.Client, maxUploadBytes int64, opts ingestOptions) {
+	if opts.limiter != nil {
+		release, err := opts.limiter.Acquire(r.Context())
+		if err != nil {
+			rw.Header().Set("Retry-After", "5")
+			writeJSONError(rw, http.StatusServiceUnavailable, "busy", "too many concurrent uploads")
+			return
+		}
+		defer release()
+	}
 	r.Body = http.MaxBytesReader(rw, r.Body, maxUploadBytes)
 
 	defer func() {
@@ -149,11 +165,19 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 	}
 
 	// Extract text from the file.
-	ext := extractor.New(ft)
-	text, extractErr := ext.Extract(r.Context(), bytes.NewReader(fileData))
+	text, extractErr := opts.extract(r.Context(), ft, fileData)
 	if extractErr != nil {
 		slog.ErrorContext(r.Context(), "extract uploaded text", "file_name", header.Filename, "error", extractErr)
-		writeJSONError(rw, http.StatusUnprocessableEntity, "extraction", extractErr.Error())
+		status, message := http.StatusUnprocessableEntity, extractErr.Error()
+		switch {
+		case errors.Is(extractErr, extractor.ErrExtractionTimeout):
+			message = "document extraction exceeded the time limit"
+		case errors.Is(extractErr, extractor.ErrExtractionFailed):
+			message = "document could not be parsed"
+		case errors.Is(extractErr, extractor.ErrExtractionUnavailable):
+			status, message = http.StatusServiceUnavailable, "document extraction is unavailable"
+		}
+		writeJSONError(rw, status, "extraction", message)
 		return
 	}
 

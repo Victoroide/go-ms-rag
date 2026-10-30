@@ -84,6 +84,8 @@ Notable changes are grouped by release.
   and answer generation.
 - Reject DOCX, DOC and text extractions above 1,000,000 bytes and bound legacy DOC
   stream reads to the uploaded file size.
+- Parse uploaded PDF, DOCX and DOC files in a separate process with time, memory
+  and concurrency limits, so a malformed file cannot stop the service.
 - Service token authentication for document and query routes, with startup checks
   that reject missing tokens outside offline mode.
 - Document allowlists applied before answer generation for restricted queries.
