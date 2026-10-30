@@ -22,6 +22,9 @@ Notable changes are grouped by release.
   namespaces created by earlier versions are still removed on deletion.
 - Database connections default to 16 pooled connections and a 30-second statement
   timeout unless `DATABASE_URL` sets them.
+- Deleting a document with a stored file returns 503 when file storage is not
+  configured; deletion continues after the caller disconnects; presigned
+  downloads are served as attachments.
 - Document labels default to `document` when omitted and are never inferred from
   content; migration 005 changes the database default without relabelling rows.
 - Evidence-backed answers follow the question's language. Empty authorized
@@ -64,6 +67,8 @@ Notable changes are grouped by release.
 
 ### Security
 
+- Remove the implicit `S3_BUCKET` default, verify bucket access and an optional
+  expected owner at startup, and send the expected owner on storage writes.
 - Service token authentication for document and query routes, with startup checks
   that reject missing tokens outside offline mode.
 - Document allowlists applied before answer generation for restricted queries.

@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/Victoroide/quarry-rag/internal/cleanup"
 
@@ -28,7 +31,8 @@ func DeleteHandler(cs domain.ChunkStore, pcDriver domain.VectorDeleter, s3Client
 			return
 		}
 
-		ctx := r.Context()
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
+		defer cancel()
 		docID := domain.DocumentID(docIDStr)
 
 		// 1. Check document exists and get s3_key.
@@ -48,6 +52,10 @@ func DeleteHandler(cs domain.ChunkStore, pcDriver domain.VectorDeleter, s3Client
 			objects = s3Client
 		}
 		if err := cleanup.Remove(ctx, cs, pcDriver, objects, doc); err != nil {
+			if errors.Is(err, cleanup.ErrFileStorageUnavailable) {
+				writeJSONError(w, http.StatusServiceUnavailable, "storage", "stored file cannot be deleted because file storage is not configured")
+				return
+			}
 			slog.ErrorContext(ctx, "delete document", "document_id", docIDStr, "error", err)
 			writeJSONError(w, http.StatusInternalServerError, "internal", "failed to delete document")
 			return
