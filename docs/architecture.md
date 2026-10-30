@@ -168,20 +168,22 @@ sequenceDiagram
     Note over Routing: Empty allowlist skips embedding and search
     Routing->>Embedder: Embed query (Titan Embed V2)
     Embedder-->>Routing: Query embedding
-    alt Explicit mode provided
-        Routing->>Routing: Use requested mode (LOCAL or GLOBAL)
-    else Auto mode
+    alt Explicit GLOBAL
+        Routing->>Routing: Select GLOBAL without a probe
+    else Automatic or explicit LOCAL
         Routing->>Pinecone: Probe top 5 with doc_type and allowlist filters
         Pinecone-->>Routing: Scoped candidates
         Routing->>Metadata: Check candidate visibility and load candidate previews
         Metadata-->>Routing: Visible candidates and their previews
         Routing->>Routing: Match entity phrases using whole words and candidate order
         Routing->>Routing: Determine mode (sub-queries > 1 -> GLOBAL, entity -> LOCAL, score >= threshold -> LOCAL, else GLOBAL)
+        Note over Routing: Explicit LOCAL overrides score and sub-query count; no visible candidate selects GLOBAL
+        Routing->>Routing: For LOCAL, select entity document or best visible candidate
     end
 
     Handler->>Retrieval: Run(QueryContext)
     Retrieval->>Pinecone: Query default namespace with doc_type and allowlist filters
-    Note over Retrieval: One query per allowlist group, no sparse-result fallback
+    Note over Retrieval: LOCAL searches the selected document; fewer than 3 chunks triggers one scope-wide top-up
     Pinecone-->>Retrieval: Scored chunks
     Retrieval->>Retrieval: filterChunksByAllowedDocIDs (tenant allowlist enforcement)
     Retrieval->>Retrieval: Remove chunks of unavailable documents using PostgreSQL
@@ -209,18 +211,20 @@ The AWS SDK retryer is the single transport retry layer for Bedrock, configured 
 
 1. **DecomposeStage**: Logs the query byte length and first 12 hexadecimal SHA-256 digits without the query text. Sets the sub-query count from multi-need surface signals (comparison keywords, conjunctions, aggregation markers). Makes no database or generation calls.
 2. **RoutingStage**:
-   - An empty allowlist skips embedding and retrieval. Otherwise, embeds the incoming query once using Bedrock Titan Embed V2. Explicit modes skip the routing probe.
-   - Automatic routing probes the top five candidates with the same allowlist and document-type filters as retrieval, then removes unavailable documents. Entity matching reads only those candidates' previews, uses whole words, prefers full and longer phrases, and breaks ties by candidate score order.
+   - An empty allowlist skips embedding and retrieval. Otherwise, embeds the incoming query once using Bedrock Titan Embed V2. Explicit `global` skips the routing probe.
+   - Automatic routing and explicit `local` probe the top five candidates with the same allowlist and document-type filters as retrieval, then remove unavailable documents. Entity matching reads only those candidates' previews, uses whole words, prefers full and longer phrases, and breaks ties by candidate score order.
    - Evaluates whether to route to `LOCAL` or `GLOBAL` retrieval:
-     - If the caller passed an explicit mode (`local` or `global`), that mode is used.
+     - Explicit `global` selects `GLOBAL`. Explicit `local` selects `LOCAL` when a visible candidate exists, regardless of score or sub-query count.
      - If the similarity probe fails, `GLOBAL` retrieval is selected without discarding the query embedding.
+     - If no visible candidate remains, `GLOBAL` retrieval is selected.
      - If multi-need signals produced multiple sub-query requirements, `GLOBAL` mode is selected.
      - If a specific named entity is identified, `LOCAL` mode is selected.
      - If the highest vector similarity score meets or exceeds `LOCAL_RETRIEVAL_THRESHOLD` (default 0.70), `LOCAL` mode is selected.
      - Otherwise, `GLOBAL` mode is selected.
+   - `LOCAL` targets the matched entity's document, or the highest-scoring visible candidate's document when no entity matches.
 3. **RetrievalStage**:
    - Queries Pinecone using the embedding produced during routing.
-   - Both modes query the default namespace with `filter_doc_type` and `allowed_document_ids` applied before top-K selection. GLOBAL issues a single query without a sparse-result fallback. Allowlists above 10000 IDs require one sequential query per group; results merge by chunk ID using the highest score, then sort and trim to top-K.
+   - Both modes query the default namespace with `filter_doc_type` and `allowed_document_ids` applied before top-K selection. `LOCAL` narrows the document filter to the routed document. If that query returns fewer than three chunks, it makes one additional query using the original authorized scope and document-type filter; results merge by chunk ID using the highest score, then sort and trim to top-K. `GLOBAL` queries the authorized scope once without a sparse-result fallback. Allowlists above 10000 IDs require one sequential query per group.
    - Retains the allowlist post-filter before synthesis as defense in depth. A nil allowlist allows all documents; an empty allowlist denies all documents.
    - Checks document visibility in PostgreSQL after the allowlist filter and before synthesis. Only completed documents contribute chunks, with a compatibility exception for older processing rows with a stored fingerprint whose final status write was lost. Failed, unfinished, deleted and missing documents are excluded even if their vectors remain searchable. Lookup failures stop the query; the top score is recomputed from visible chunks.
 4. **SynthesisStage**:

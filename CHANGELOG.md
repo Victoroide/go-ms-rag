@@ -24,6 +24,7 @@ Notable changes are grouped by release.
 
 ### Changed
 
+- LOCAL retrieval draws evidence from the routed document (named entity or best match) and tops up from the authorized scope when it has fewer than 3 matching chunks; explicit `global` skips the routing probe.
 - Query failures return 504, 503 (with `Retry-After`) or 502 with generic messages; responses report `finish_reason`; HTTP server timeouts are configurable.
 
 - AWS calls share one retry policy (`AWS_MAX_ATTEMPTS`, no client-side retry

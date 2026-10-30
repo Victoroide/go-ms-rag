@@ -226,7 +226,7 @@ Request fields:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | yes | Natural-language query string (1 to 10,000 decoded bytes) |
-| `mode` | string | no | Retrieval mode: `"auto"` (default), `"local"`, or `"global"`. Case-insensitive |
+| `mode` | string | no | Retrieval mode: `"auto"` (default), `"local"`, or `"global"`. Case-insensitive. `local` answers mainly from the most relevant authorized document (named entity or best match), topped up from the authorized scope when that document has fewer than 3 matching chunks. With no visible candidate, `local` uses `global`. Explicit `global` skips the routing probe |
 | `filter_doc_type` | string | no | Restricts vector retrieval to chunks matching the given `doc_type`, using the label normalization and limits above |
 | `max_chunks` | int | no | Requested chunks to retrieve (0 to 100), capped by `MAX_CHUNKS_PER_QUERY`. Omitted or zero uses that configured maximum (default 10) |
 | `allowed_document_ids` | array of strings | no | Tenant/role allowlist of UUIDs, at most `MAX_ALLOWED_DOCUMENT_IDS` entries (default 25000). IDs are canonicalized and deduplicated. Omitted or `null` means unrestricted unless `REQUIRE_DOCUMENT_ALLOWLIST=true`, which makes a non-null field mandatory. An empty list (`[]`) returns the no-information answer without embedding or search. The allowlist is applied inside vector search and routing |
