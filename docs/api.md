@@ -166,6 +166,10 @@ Form fields:
 | `document_id` | string | no | Optional document UUID with the same identity and conflict rules as JSON requests, applied to extracted text |
 | `metadata` | JSON object string | no | Optional metadata with the same limits as JSON ingestion; duplicate top-level keys, trailing data and repeated metadata fields return 400. The stored object includes `source_file` set to the uploaded filename, overriding a caller value, and must still fit the size limit |
 
+DOC extraction supports the main document text in Word 97–2003 binary documents;
+headers, footers, footnotes and comments are not extracted. Word 6/95 documents
+and encrypted files return 422.
+
 New uploads return 202 after durable acceptance with the retained or generated identifier. Completed duplicates return 200 `already_ingested`; in-flight duplicates return 202 with the same identifier; failed duplicates return 202 and are requeued. Without `document_id`, uploads use content deduplication. A configured source store must accept the original upload before document acceptance. New source objects are removed when acceptance does not retain them.
 
 Error Status Codes:
