@@ -15,6 +15,7 @@ When `SERVICE_TOKEN` is configured, all mutating and sensitive endpoints require
 - `POST /ingest`
 - `POST /query`
 - `GET /documents`
+- `GET /documents/{doc_id}`
 - `GET /documents/{doc_id}/file`
 - `DELETE /documents/{doc_id}`
 
@@ -259,32 +260,53 @@ curl -X POST localhost:8081/query \
 
 ### GET /documents
 
-Returns metadata references for all stored documents. Used by calling services for inventory verification and orphan vector reconciliation.
+Returns document summaries for inventory verification and orphan vector reconciliation. PostgreSQL returns summaries in ascending UUID order, including processing, completed and failed documents.
 
 - **Method**: `GET`
 - **Path**: `/documents`
 - **Auth**: Required (`X-Service-Token`)
 - **Request Body**: None
 
+Optional query parameters:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `limit` | int | Page size from 1 to 1000 |
+| `after` | string | UUID cursor, exclusive; requires `limit` |
+
+Without pagination parameters, PostgreSQL streams the full listing without buffering every row. The response writes `documents` before `count`; an empty listing is `{"documents":[],"count":0}`. If a stream fails after it begins, its JSON is incomplete; discard the partial result and retry. Stores without summary support retain the reference listing and return an empty array when no documents exist.
+
 Response fields (200 OK):
 
 | Field | Type | Description |
 |---|---|---|
-| `documents` | array | List of stored document references |
-| `count` | int | Total number of documents returned |
+| `documents` | array | Document summaries; always an array, including when empty |
+| `count` | int | Number of documents returned in this response |
+| `next_after` | string or null | Present for paginated responses; last UUID when the page contains `limit` documents, otherwise null |
 
-Document reference fields:
+Use `next_after` as the next request's `after` value and keep the same `limit`. A full final page may lead to one empty page before `next_after` becomes null. Each request reads the current inventory; concurrent ingestion and deletion can change later pages.
+
+Document summary fields:
 
 | Field | Type | Description |
 |---|---|---|
 | `document_id` | string | Document UUID |
 | `doc_type` | string | Document category label |
 | `s3_key` | string | S3 object key, or omitted if no binary file was stored |
+| `status` | string | Ingestion state: `processing`, `completed` or `failed` |
+| `chunk_count` | int | Number of stored chunks |
+| `file_name` | string or null | Original uploaded filename |
+| `file_type` | string or null | Original uploaded file type |
+| `created_at` | string | Creation timestamp in RFC 3339 format |
+| `updated_at` | string | Latest ingestion transition timestamp in RFC 3339 format |
+| `completed_at` | string or null | Completion timestamp in RFC 3339 format |
+| `last_error` | string | Last ingestion error, included only for failed documents when recorded |
 
 Error Status Codes:
 
 | Status | Error Category | Condition |
 |---|---|---|
+| `400 Bad Request` | `validation` | Invalid `limit`, invalid `after`, duplicate pagination parameters or `after` without `limit` |
 | `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
 | `500 Internal Server Error` | `internal` | Database query failure |
 
@@ -293,7 +315,29 @@ Example:
 ```sh
 curl localhost:8081/documents \
   -H "X-Service-Token: dev-token"
+
+curl 'localhost:8081/documents?limit=100&after=8a3e792c-5df6-4b6e-a612-4f7db4959db2' \
+  -H "X-Service-Token: dev-token"
 ```
+
+---
+
+### GET /documents/{doc_id}
+
+Returns one document summary with the fields described above. Poll this endpoint after ingestion to observe completion or failure. Document content and caller metadata are excluded.
+
+- **Method**: `GET`
+- **Path**: `/documents/{doc_id}`
+- **Auth**: Required (`X-Service-Token`)
+- **Response**: The document summary object (200 OK)
+
+| Status | Error Category | Condition |
+|---|---|---|
+| `400 Bad Request` | `validation` | `doc_id` is not a UUID |
+| `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
+| `404 Not Found` | `not_found` | The document does not exist |
+| `500 Internal Server Error` | `internal` | Database lookup failure |
+| `503 Service Unavailable` | `unavailable` | The configured store does not support document summaries |
 
 ---
 

@@ -6,6 +6,7 @@ Notable changes are grouped by release.
 
 ### Added
 
+- `GET /documents/{doc_id}` reports ingestion status, timestamps and the last error; `GET /documents` accepts `limit` and `after` and reports `status`, `chunk_count` and `created_at`.
 - JSON and multipart document ingestion with content deduplication, asynchronous
   processing and caller-supplied document identifiers.
 - Text extraction, normalization, semantic chunking and chunk quality metadata.
@@ -61,6 +62,7 @@ Notable changes are grouped by release.
 
 ### Fixed
 
+- `GET /documents` returns an empty array instead of `null` and streams large listings.
 - Retain source files for caller-owned documents with identical text and after uncertain acceptance results; bound acceptance independently of caller cancellation.
 - Clear existing vectors before each ingestion attempt and again after document deletion; perform terminal cleanup under the live lease before recording failure.
 - Reject NUL characters in document labels before storage.
