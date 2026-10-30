@@ -81,6 +81,7 @@ type QueryContext struct {
 	RetrievedChunks []domain.ScoredChunk
 
 	// Populated by synthesis stage.
+	FinishReason  string
 	FinalAnswer   string
 	TokenUsage    domain.TokenUsage
 	ContextTokens int  // estimated synthesis input tokens (after compression)

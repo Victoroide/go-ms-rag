@@ -28,6 +28,8 @@ func baseValidConfig() *Config {
 		MaxAllowedDocumentIDs: 25000,
 		AWSMaxAttempts:        4, EmbedTimeout: 15 * time.Second,
 		ShutdownDrainDelay: 5 * time.Second, HealthCacheTTL: 10 * time.Second,
+		QueryTimeout: time.Minute, SynthesisTimeout: 45 * time.Second, QueryConcurrency: 32, QueryQueueTimeout: 2 * time.Second,
+		HTTPReadTimeout: time.Minute, HTTPWriteTimeout: 75 * time.Second, HTTPIdleTimeout: time.Minute,
 	}
 }
 
