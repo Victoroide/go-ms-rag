@@ -1,4 +1,4 @@
-.PHONY: build test lint vet ci up down logs cleanup validate
+.PHONY: build test lint vet ci up down logs cleanup reconcile validate
 
 # Run inside container — no host deps needed
 build:
@@ -35,6 +35,9 @@ logs:
 # Delete explicit document UUIDs: make cleanup IDS="<uuid> <uuid>".
 cleanup:
 	go run ./scripts/cleanup $(IDS)
+
+reconcile:
+	go run ./scripts/reconcile $(ARGS)
 
 validate:
 	go run ./scripts/validate/main.go
