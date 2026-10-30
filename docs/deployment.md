@@ -132,6 +132,33 @@ Confirm that `TestSmoke_PreexistingDocumentRemainsRetrievable` passes without sk
 
 ---
 
+## Vector Index Maintenance
+
+Use `make reconcile` during a maintenance window to inspect orphaned vectors and
+legacy document namespaces. Configure the same PostgreSQL database and Pinecone
+index as the deployment, ensure the ingestion job migrations have been applied,
+and pause ingestion and other index writers until reconciliation finishes.
+Always inspect a dry run before applying deletions:
+
+```sh
+make reconcile ARGS="-limit=10000 -page=100"
+make reconcile ARGS="-apply -limit=10000 -page=100"
+```
+
+Without `-apply`, the command only reads and prints JSON counts and a bounded
+sample. It preserves stored documents, processing documents and failed documents
+with retry jobs. Default-namespace vectors with missing or invalid `doc_id`, a
+missing document row, or a terminally failed document are eligible. UUID-named
+legacy namespaces are eligible only when no document row exists.
+
+The default limit is 100000 vectors across selected default-namespace IDs and
+the reported counts of whole legacy namespaces; namespaces that exceed the
+remaining budget are skipped. Counts are eventually consistent, so use a quiet
+index and rerun the dry run after deletion has propagated. Pod-based indexes
+without vector listing support reconcile legacy namespaces only and report that
+limitation on stderr. See the operational scripts documentation for page sizes,
+output fields and partial deletion failures.
+
 ## Health Probes and Readiness
 
 The service exposes three unauthenticated probe endpoints:
