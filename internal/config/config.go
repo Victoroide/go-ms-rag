@@ -51,7 +51,7 @@ type Config struct {
 	// QA/local only — never enable in production.
 	FakeMode bool
 
-	// ServiceToken protects every route except the public health probe.
+	// ServiceToken is merged with ServiceTokens to protect service routes.
 	ServiceToken string
 
 	S3ExpectedBucketOwner string
@@ -79,6 +79,8 @@ type Config struct {
 	EmbedTimeout       time.Duration
 	ShutdownDrainDelay time.Duration
 	HealthCacheTTL     time.Duration
+
+	ServiceTokens []string
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -99,6 +101,7 @@ func Load() (*Config, error) {
 		S3Bucket:              os.Getenv("S3_BUCKET"),
 		SynthesisModel:        envOrDefault("SYNTHESIS_MODEL", "fallback"),
 		ServiceToken:          os.Getenv("SERVICE_TOKEN"),
+		ServiceTokens:         strings.Split(os.Getenv("SERVICE_TOKENS"), ","),
 		S3ExpectedBucketOwner: os.Getenv("S3_EXPECTED_BUCKET_OWNER"),
 		AWSSessionToken:       os.Getenv("AWS_SESSION_TOKEN"),
 	}
@@ -250,11 +253,8 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: SYNTHESIS_MODEL must be primary, fallback or hybrid")
 	}
 
-	// Fail closed: a real (non-fake) deployment must set SERVICE_TOKEN so the
-	// mutating/file routes are authenticated. An empty token disables service
-	// auth, which is acceptable only for offline fake mode (dev/CI/QA).
-	if !c.FakeMode && strings.TrimSpace(c.ServiceToken) == "" {
-		return fmt.Errorf("config: SERVICE_TOKEN is required when GO_RAG_FAKE_MODE is off")
+	if err := c.validateServiceTokens(); err != nil {
+		return err
 	}
 	if c.S3ExpectedBucketOwner != "" {
 		if len(c.S3ExpectedBucketOwner) != 12 || strings.IndexFunc(c.S3ExpectedBucketOwner, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {

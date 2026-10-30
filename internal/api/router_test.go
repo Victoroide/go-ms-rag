@@ -37,3 +37,33 @@ func TestServiceRoutesRequireAuthentication(t *testing.T) {
 		}
 	}
 }
+
+func TestServiceRoutesAcceptRotationTokens(t *testing.T) {
+	router := NewRouter(&RouterDeps{Config: &config.Config{ServiceTokens: []string{"old-secret", "new-secret"}}, ChunkStore: probeStore{}, VectorStore: memory.NewFakeVectorStore()})
+	for _, route := range []struct{ method, path string }{
+		{http.MethodPost, "/ingest"},
+		{http.MethodPost, "/query"},
+		{http.MethodGet, "/documents"},
+		{http.MethodGet, "/documents/not-a-uuid"},
+		{http.MethodGet, "/documents/not-a-uuid/file"},
+		{http.MethodDelete, "/documents/not-a-uuid"},
+	} {
+		for _, token := range []string{"", "wrong-secret", "old-secret", "new-secret"} {
+			req := httptest.NewRequestWithContext(t.Context(), route.method, route.path, http.NoBody)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Service-Token", token)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			want := http.StatusUnauthorized
+			if token == "old-secret" || token == "new-secret" {
+				want = http.StatusBadRequest
+				if route.path == "/documents" {
+					want = http.StatusOK
+				}
+			}
+			if rec.Code != want {
+				t.Errorf("%s %s with token %q: got %d, want %d", route.method, route.path, token, rec.Code, want)
+			}
+		}
+	}
+}

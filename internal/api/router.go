@@ -35,12 +35,15 @@ type RouterDeps struct {
 // NewRouter wires all HTTP routes, handlers, and middleware.
 func NewRouter(deps *RouterDeps) http.Handler {
 	mux := http.NewServeMux()
-	// Service-to-service auth: when SERVICE_TOKEN is set, every route except the
+	// Service-to-service auth: when service tokens are set, every route except the
 	// public probes requires a matching X-Service-Token header. The presigned
 	// file GET is included because it mints S3 download URLs for any document id
 	// and must never be reachable without the trusted caller in front of it.
-	tok := deps.Config.ServiceToken
-	middleware.LogServiceAuthState(tok)
+	tokens := deps.Config.ServiceTokens
+	if len(tokens) == 0 && deps.Config.ServiceToken != "" {
+		tokens = []string{deps.Config.ServiceToken}
+	}
+	middleware.LogServiceAuthState(tokens)
 	ingestOpts := []handler.IngestOption{handler.WithMaxPending(deps.Config.WorkerQueueSize), handler.WithUploadLimiter(extractor.NewLimiter(deps.Config.ExtractConcurrency, deps.Config.ExtractQueueTimeout))}
 	if deps.Config.ExtractIsolation {
 		sb, err := extractor.NewSandbox(extractor.SandboxConfig{Timeout: deps.Config.ExtractTimeout, MemoryLimitMB: deps.Config.ExtractMemoryLimitMB})
@@ -64,12 +67,12 @@ func NewRouter(deps *RouterDeps) http.Handler {
 	if deps.S3Client != nil {
 		objects = deps.S3Client
 	}
-	mux.HandleFunc("POST /ingest", middleware.RequireServiceToken(tok, handler.IngestHandler(deps.Worker, deps.ChunkStore, objects, deps.Config.MaxUploadBytes, ingestOpts...)))
-	mux.HandleFunc("POST /query", middleware.RequireServiceToken(tok, handler.QueryHandler(deps.Retriever, deps.Ambassador, deps.Config, deps.PGPool)))
-	mux.HandleFunc("GET /documents", middleware.RequireServiceToken(tok, handler.ListDocumentsHandler(deps.ChunkStore)))
-	mux.HandleFunc("GET /documents/{doc_id}", middleware.RequireServiceToken(tok, handler.DocumentStatusHandler(deps.ChunkStore)))
-	mux.HandleFunc("GET /documents/{doc_id}/file", middleware.RequireServiceToken(tok, handler.FileHandler(deps.ChunkStore, deps.S3Client)))
-	mux.HandleFunc("DELETE /documents/{doc_id}", middleware.RequireServiceToken(tok, handler.DeleteHandler(deps.ChunkStore, deps.PineconeDriver, deps.S3Client)))
+	mux.HandleFunc("POST /ingest", middleware.RequireServiceTokens(tokens, handler.IngestHandler(deps.Worker, deps.ChunkStore, objects, deps.Config.MaxUploadBytes, ingestOpts...)))
+	mux.HandleFunc("POST /query", middleware.RequireServiceTokens(tokens, handler.QueryHandler(deps.Retriever, deps.Ambassador, deps.Config, deps.PGPool)))
+	mux.HandleFunc("GET /documents", middleware.RequireServiceTokens(tokens, handler.ListDocumentsHandler(deps.ChunkStore)))
+	mux.HandleFunc("GET /documents/{doc_id}", middleware.RequireServiceTokens(tokens, handler.DocumentStatusHandler(deps.ChunkStore)))
+	mux.HandleFunc("GET /documents/{doc_id}/file", middleware.RequireServiceTokens(tokens, handler.FileHandler(deps.ChunkStore, deps.S3Client)))
+	mux.HandleFunc("DELETE /documents/{doc_id}", middleware.RequireServiceTokens(tokens, handler.DeleteHandler(deps.ChunkStore, deps.PineconeDriver, deps.S3Client)))
 	var h http.Handler = mux
 	h = middleware.Logging(h)
 	h = middleware.Recovery(h)
