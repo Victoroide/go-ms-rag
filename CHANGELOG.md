@@ -24,6 +24,8 @@ Notable changes are grouped by release.
 
 ### Changed
 
+- Query failures return 504, 503 (with `Retry-After`) or 502 with generic messages; responses report `finish_reason`; HTTP server timeouts are configurable.
+
 - AWS calls share one retry policy (`AWS_MAX_ATTEMPTS`, no client-side retry
   quota, `ModelTimeoutException` retried); embedding calls time out after
   `EMBED_TIMEOUT`.
@@ -77,6 +79,8 @@ Notable changes are grouped by release.
 
 - Bound chunks by estimated tokens and 30,000 bytes, splitting unspaced scripts, long tokens and long sentences; stop emitting chunks that repeat only the previous chunk's overlap.
 - Require `CHUNK_TOKEN_SIZE` to be at least 2, the minimum estimate for a non-dense character.
+- Bound each query by `QUERY_TIMEOUT` and its synthesis call by `SYNTHESIS_TIMEOUT`, limit concurrent queries, and retry upstream calls in a single layer.
+
 - `GET /documents` returns an empty array instead of `null` and streams large listings.
 - Preserve superscripts, fractions, circled numbers and text between comparison operators during ingestion; keep carriage-return paragraph breaks; strip HTML only from documents that contain markup.
 - Reject embeddings whose length differs from `EMBEDDING_DIMENSIONS`.
@@ -114,6 +118,8 @@ Notable changes are grouped by release.
 - Report panic responses as JSON and log the status actually written.
 
 ### Security
+
+- Stop logging query text; logs record its length and digest.
 
 - Remove invisible Unicode format characters, such as tag characters and bidirectional isolates, from ingested text.
 - Cache dependency checks behind `GET /health` so unauthenticated requests cannot multiply calls to the vector index, database or file storage.
