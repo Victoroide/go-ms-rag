@@ -81,6 +81,15 @@ type Config struct {
 	HealthCacheTTL     time.Duration
 
 	ServiceTokens []string
+
+	QueryTimeout      time.Duration
+	SynthesisTimeout  time.Duration
+	QueryConcurrency  int
+	QueryQueueTimeout time.Duration
+	MinRelevanceScore float64
+	HTTPReadTimeout   time.Duration
+	HTTPWriteTimeout  time.Duration
+	HTTPIdleTimeout   time.Duration
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -119,6 +128,7 @@ func Load() (*Config, error) {
 		{"EXTRACT_CONCURRENCY", &cfg.ExtractConcurrency, 2}, {"EXTRACT_MEMORY_LIMIT_MB", &cfg.ExtractMemoryLimitMB, 512},
 		{"MAX_ALLOWED_DOCUMENT_IDS", &cfg.MaxAllowedDocumentIDs, 25000},
 		{"AWS_MAX_ATTEMPTS", &cfg.AWSMaxAttempts, 4},
+		{"QUERY_CONCURRENCY", &cfg.QueryConcurrency, 32},
 	} {
 		value, err := envIntOrDefault(setting.key, setting.fallback)
 		if err != nil {
@@ -131,6 +141,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.LocalRetrievalThreshold, err = envFloat64OrDefault("LOCAL_RETRIEVAL_THRESHOLD", 0.70); err != nil {
+		return nil, err
+	}
+	if cfg.MinRelevanceScore, err = envFloat64OrDefault("MIN_RELEVANCE_SCORE", 0); err != nil {
 		return nil, err
 	}
 	if cfg.MaxUploadBytes, err = envInt64OrDefault("MAX_UPLOAD_BYTES", 20971520); err != nil {
@@ -164,12 +177,20 @@ func Load() (*Config, error) {
 		{"EMBED_TIMEOUT", &cfg.EmbedTimeout, 15 * time.Second},
 		{"SHUTDOWN_DRAIN_DELAY", &cfg.ShutdownDrainDelay, 5 * time.Second},
 		{"HEALTH_CACHE_TTL", &cfg.HealthCacheTTL, 10 * time.Second},
+		{"QUERY_TIMEOUT", &cfg.QueryTimeout, time.Minute},
+		{"SYNTHESIS_TIMEOUT", &cfg.SynthesisTimeout, 45 * time.Second},
+		{"QUERY_QUEUE_TIMEOUT", &cfg.QueryQueueTimeout, 2 * time.Second},
+		{"HTTP_READ_TIMEOUT", &cfg.HTTPReadTimeout, time.Minute},
+		{"HTTP_IDLE_TIMEOUT", &cfg.HTTPIdleTimeout, time.Minute},
 	} {
 		value, parseErr := envDurationOrDefault(setting.key, setting.fallback)
 		if parseErr != nil {
 			return nil, parseErr
 		}
 		*setting.dst = value
+	}
+	if cfg.HTTPWriteTimeout, err = envDurationOrDefault("HTTP_WRITE_TIMEOUT", cfg.QueryTimeout+15*time.Second); err != nil {
+		return nil, err
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -298,6 +319,30 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: HEALTH_CACHE_TTL must be between 1s and 5m")
 	}
 
+	if c.QueryTimeout < 5*time.Second || c.QueryTimeout > 10*time.Minute {
+		return fmt.Errorf("config: QUERY_TIMEOUT must be between 5s and 10m")
+	}
+	if c.SynthesisTimeout <= 0 || c.SynthesisTimeout >= c.QueryTimeout {
+		return fmt.Errorf("config: SYNTHESIS_TIMEOUT must be positive and below QUERY_TIMEOUT")
+	}
+	if c.QueryConcurrency < 1 || c.QueryConcurrency > 1024 {
+		return fmt.Errorf("config: QUERY_CONCURRENCY must be between 1 and 1024")
+	}
+	if c.QueryQueueTimeout < 0 || c.QueryQueueTimeout > time.Minute {
+		return fmt.Errorf("config: QUERY_QUEUE_TIMEOUT must be between 0s and 60s")
+	}
+	if math.IsNaN(c.MinRelevanceScore) || math.IsInf(c.MinRelevanceScore, 0) || c.MinRelevanceScore < 0 || c.MinRelevanceScore > 1 {
+		return fmt.Errorf("config: MIN_RELEVANCE_SCORE must be between 0 and 1")
+	}
+	if c.HTTPReadTimeout < 5*time.Second || c.HTTPReadTimeout > 30*time.Minute {
+		return fmt.Errorf("config: HTTP_READ_TIMEOUT must be between 5s and 30m")
+	}
+	if c.HTTPWriteTimeout <= c.QueryTimeout {
+		return fmt.Errorf("config: HTTP_WRITE_TIMEOUT must exceed QUERY_TIMEOUT")
+	}
+	if c.HTTPIdleTimeout <= 0 {
+		return fmt.Errorf("config: HTTP_IDLE_TIMEOUT must be positive")
+	}
 	return nil
 }
 

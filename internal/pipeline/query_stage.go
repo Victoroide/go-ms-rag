@@ -2,10 +2,13 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log"
+	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/Victoroide/quarry-rag/internal/domain"
@@ -58,7 +61,9 @@ var multiNeedPattern = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(?:and|or|all
 func hasMultiNeedSignal(query string) bool { return multiNeedPattern.MatchString(query) }
 
 // Run sets the sub-query count from surface cues without external calls.
-func (s *DecomposeStage) Run(_ context.Context, qc *QueryContext) error {
+func (s *DecomposeStage) Run(ctx context.Context, qc *QueryContext) error {
+	digest := sha256.Sum256([]byte(qc.OriginalQuery))
+	slog.InfoContext(ctx, "decompose_stage", "query_bytes", len(qc.OriginalQuery), "query_digest", fmt.Sprintf("%x", digest[:6]))
 	if hasMultiNeedSignal(qc.OriginalQuery) {
 		qc.SubQueries = []string{qc.OriginalQuery, qc.OriginalQuery}
 	} else {
@@ -309,7 +314,25 @@ func trimChunksForSynthesis(in []domain.ScoredChunk, maxChunks int) []domain.Sco
 
 // Run synthesizes a grounded answer in the language of the question.
 func (s *SynthesisStage) Run(ctx context.Context, qc *QueryContext) error {
+	minScore := 0.0
+	if s.cfg != nil {
+		minScore = s.cfg.MinRelevanceScore
+	}
+	if minScore > 0 {
+		filtered := make([]domain.ScoredChunk, 0, len(qc.RetrievedChunks))
+		for _, sc := range qc.RetrievedChunks {
+			if sc.Score >= minScore {
+				filtered = append(filtered, sc)
+			}
+		}
+		qc.RetrievedChunks = filtered
+		qc.TopScore = 0
+		if len(filtered) > 0 {
+			qc.TopScore = filtered[0].Score
+		}
+	}
 	if len(qc.RetrievedChunks) == 0 {
+		qc.FinishReason = "no_evidence"
 		qc.FinalAnswer = "No relevant information was found to answer this question."
 		qc.ContextTokens, qc.ContextChunks = 0, 0
 		qc.TokenUsage = domain.TokenUsage{}
@@ -361,14 +384,36 @@ func (s *SynthesisStage) Run(ctx context.Context, qc *QueryContext) error {
 	// Synthesis is free-form text — never JSON. Use the plain path so
 	// the ambassador's JSON-correction retry loop is bypassed even when
 	// SYNTHESIS_MODEL=primary routes us through Nova Micro.
+	timeout := s.cfg.SynthesisTimeout
+	if timeout <= 0 {
+		timeout = 45 * time.Second
+	}
+	synthesisCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	result, err := s.ambassador.ConverseRoutedPlain(
-		ctx, modelID, synthesisSystemPrompt, messages, 0.2, answerSynthesisMaxOutput,
+		synthesisCtx, modelID, synthesisSystemPrompt, messages, 0.2, answerSynthesisMaxOutput,
 	)
 	if err != nil {
 		return fmt.Errorf("synthesis_stage: %w", err)
 	}
 
+	if err := synthesisCtx.Err(); err != nil {
+		return fmt.Errorf("synthesis_stage: %w", err)
+	}
 	qc.FinalAnswer = llm.ExtractText(result.Output)
+	if strings.TrimSpace(qc.FinalAnswer) == "" {
+		return ErrSynthesisEmpty
+	}
+	switch result.Output.StopReason {
+	case "end_turn", "stop_sequence":
+		qc.FinishReason = "stop"
+	case "max_tokens":
+		qc.FinishReason = "max_tokens"
+	case "content_filtered", "guardrail_intervened":
+		qc.FinishReason = "filtered"
+	case "model_context_window_exceeded":
+		qc.FinishReason = "context_exceeded"
+	}
 
 	// Track token usage.
 	if result.Output != nil && result.Output.Usage != nil {

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -49,6 +50,7 @@ type ScoredChunkResponse struct {
 
 // QueryResponse is the POST /query response body.
 type QueryResponse struct {
+	FinishReason  string                `json:"finish_reason,omitempty"`
 	Answer        string                `json:"answer"`
 	Mode          string                `json:"mode"`
 	ChunksUsed    int                   `json:"chunks_used"`
@@ -88,6 +90,15 @@ func validateQueryRequest(req *QueryRequest) *APIError {
 
 // QueryHandler returns an HTTP handler for POST /query.
 func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Config, pool *pgxpool.Pool) http.HandlerFunc {
+	concurrency := cfg.QueryConcurrency
+	if concurrency <= 0 {
+		concurrency = 32
+	}
+	slots := make(chan struct{}, concurrency)
+	queryTimeout := cfg.QueryTimeout
+	if queryTimeout <= 0 {
+		queryTimeout = time.Minute
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !isJSONRequest(r) {
 			writeJSONError(w, http.StatusUnsupportedMediaType, "validation", "Content-Type must be application/json")
@@ -107,7 +118,13 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 			writeJSONError(w, http.StatusBadRequest, apiErr.Error, apiErr.Message)
 			return
 		}
-		ctx := r.Context()
+		if err := acquireQuerySlot(r.Context(), slots, cfg.QueryQueueTimeout); err != nil {
+			writeQueryError(w, r, err)
+			return
+		}
+		defer func() { <-slots }()
+		ctx, cancel := context.WithTimeout(r.Context(), queryTimeout)
+		defer cancel()
 
 		qc := &pipeline.QueryContext{
 			OriginalQuery:      req.Query,
@@ -131,8 +148,11 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 		}
 
 		_, err := pipeline.RunRetrievalPipeline(ctx, qc, stages)
+		if err == nil {
+			err = ctx.Err()
+		}
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "pipeline", err.Error())
+			writeQueryError(w, r, err)
 			return
 		}
 
@@ -169,6 +189,7 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 
 		resp := QueryResponse{
 			Answer:        qc.FinalAnswer,
+			FinishReason:  qc.FinishReason,
 			Mode:          qc.RetrievalMode,
 			ChunksUsed:    len(qc.RetrievedChunks),
 			ContextChunks: qc.ContextChunks,

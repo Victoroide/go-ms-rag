@@ -5,20 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand/v2"
-	"net/http"
 	"strings"
-	"time"
 
 	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	brtypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
-)
-
-const (
-	maxRetries = 5
-	baseDelay  = 500 * time.Millisecond
-	maxDelay   = 30 * time.Second
 )
 
 // ConverseRoutedResult carries the output of a routed converse call,
@@ -31,8 +22,7 @@ type ConverseRoutedResult struct {
 	RoutingReq   RoutingRequest
 }
 
-// Ambassador wraps a Converser with retry logic, exponential backoff
-// with jitter, and the three-attempt correction pattern:
+// Ambassador wraps a Converser with the three-attempt correction pattern:
 //
 //	attempt 1: primary model
 //	attempt 2: JSON correction prompt + primary model
@@ -65,32 +55,16 @@ func (a *Ambassador) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Converse executes a Converse call with retry and backoff on transient errors.
+// Converse executes one call; the client's SDK retryer owns transport retries.
 func (a *Ambassador) Converse(ctx context.Context, messages []brtypes.Message) (*bedrockruntime.ConverseOutput, error) {
-	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("ambassador: context canceled: %w", err)
-		}
-		output, err := a.client.Converse(ctx, messages)
-		if err == nil {
-			return output, nil
-		}
-		if !isRetryable(err) {
-			return nil, fmt.Errorf("ambassador: non-retryable error: %w", err)
-		}
-		lastErr = err
-		if attempt == maxRetries {
-			break
-		}
-		delay := backoffDelay(attempt)
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("ambassador: context canceled during backoff: %w", ctx.Err())
-		case <-time.After(delay):
-		}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("ambassador: context canceled: %w", err)
 	}
-	return nil, fmt.Errorf("ambassador: exhausted %d retries: %w", maxRetries, lastErr)
+	output, err := a.client.Converse(ctx, messages)
+	if err != nil {
+		return nil, fmt.Errorf("ambassador: converse: %w", err)
+	}
+	return output, nil
 }
 
 // ConverseRouted sends a request to the specified model with token
@@ -103,8 +77,7 @@ func (a *Ambassador) ConverseRouted(ctx context.Context, modelID string, message
 // NOT enter the JSON-correction retry loop. It is the right entry point
 // for stages whose output is free-form text (synthesis answers), where
 // JSON validation would always fail and trigger a wasted re-call. The
-// caller is still protected by the standard transient-error retry
-// (backoff with jitter) inside converseWithModel.
+// client SDK owns transient-error retries.
 func (a *Ambassador) ConverseRoutedPlain(ctx context.Context, modelID, systemPrompt string, messages []brtypes.Message, temperature float32, maxTokens int) (*ConverseRoutedResult, error) {
 	output, err := a.converseWithModel(ctx, modelID, systemPrompt, messages, temperature, maxTokens)
 	if err != nil {
@@ -292,66 +265,17 @@ func (a *Ambassador) retryWithCorrection(ctx context.Context, modelID, systemPro
 
 // converseWithModel dispatches to the ModelConverser interface if available.
 func (a *Ambassador) converseWithModel(ctx context.Context, modelID, systemPrompt string, messages []brtypes.Message, temperature float32, maxTokens int) (*bedrockruntime.ConverseOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("ambassador: context canceled: %w", err)
+	}
 	if mc, ok := a.client.(ModelConverser); ok {
-		var lastErr error
-		for attempt := 0; attempt <= maxRetries; attempt++ {
-			if err := ctx.Err(); err != nil {
-				return nil, fmt.Errorf("ambassador: context canceled: %w", err)
-			}
-			output, err := mc.ConverseWithModelAndSystem(ctx, modelID, systemPrompt, messages, temperature, maxTokens)
-			if err == nil {
-				return output, nil
-			}
-			if !isRetryable(err) {
-				return nil, fmt.Errorf("ambassador: non-retryable error: %w", err)
-			}
-			lastErr = err
-			if attempt == maxRetries {
-				break
-			}
-			delay := backoffDelay(attempt)
-			select {
-			case <-ctx.Done():
-				return nil, fmt.Errorf("ambassador: context canceled during backoff: %w", ctx.Err())
-			case <-time.After(delay):
-			}
+		output, err := mc.ConverseWithModelAndSystem(ctx, modelID, systemPrompt, messages, temperature, maxTokens)
+		if err != nil {
+			return nil, fmt.Errorf("ambassador: converse: %w", err)
 		}
-		return nil, fmt.Errorf("ambassador: exhausted %d retries: %w", maxRetries, lastErr)
+		return output, nil
 	}
 	return a.Converse(ctx, messages)
-}
-
-func isRetryable(err error) bool {
-	msg := err.Error()
-	retryablePatterns := []string{
-		"ThrottlingException",
-		"ServiceUnavailableException",
-		"RequestTimeoutException",
-	}
-	for _, pattern := range retryablePatterns {
-		if strings.Contains(msg, pattern) {
-			return true
-		}
-	}
-	if strings.Contains(msg, fmt.Sprintf("%d", http.StatusTooManyRequests)) ||
-		strings.Contains(msg, fmt.Sprintf("%d", http.StatusServiceUnavailable)) {
-		return true
-	}
-	return false
-}
-
-func backoffDelay(attempt int) time.Duration {
-	delay := baseDelay
-	for range attempt {
-		delay *= 2
-		if delay > maxDelay {
-			delay = maxDelay
-			break
-		}
-	}
-	//nolint:gosec // Retry jitter does not require cryptographic randomness.
-	jitter := time.Duration(rand.Float64() * float64(baseDelay))
-	return delay + jitter
 }
 
 func validateJSON(text string) error {
