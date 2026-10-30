@@ -70,11 +70,12 @@ these packages together. Keep operational commands separate under scripts.
 ## Database changes
 
 Add a new numbered SQL file under internal/store/postgres/migrations using the
-next unused number and a descriptive suffix. Never edit a shipped migration.
-Embed the new file and execute it after existing migrations in
-internal/store/postgres/client.go. Migrations run on every startup, so make them
-safe to apply again. Test both a fresh database and an upgrade from the previous
-schema with existing documents.
+next unused three-digit number and a descriptive suffix. Files are embedded
+automatically and applied once in version order, in a transaction under a
+PostgreSQL advisory lock. The schema_migrations table records each version,
+filename and checksum. Never edit an applied migration; add a new numbered file
+instead. Test both a fresh database and an upgrade from the previous schema
+with existing documents.
 
 ## Commits and pull requests
 

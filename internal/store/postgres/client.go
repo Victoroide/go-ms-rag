@@ -3,7 +3,6 @@ package postgres
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,21 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed migrations/001_init.sql
-var migrationSQL string
-
-//go:embed migrations/002_add_file_storage.sql
-var migration002SQL string
-
-//go:embed migrations/003_add_content_preview.sql
-var migration003SQL string
-
-//go:embed migrations/004_add_doc_type.sql
-var migration004SQL string
-
-//go:embed migrations/005_document_default.sql
-var migration005SQL string
-
 // Client manages the PostgreSQL connection pool and provides
 // chunk metadata and document fingerprint operations.
 type Client struct {
@@ -37,7 +21,11 @@ type Client struct {
 
 // NewClient creates a PostgreSQL client from DATABASE_URL.
 func NewClient(ctx context.Context, databaseURL string) (*Client, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+	config, err := poolConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: configure pool: %w", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: connect: %w", err)
 	}
@@ -49,30 +37,22 @@ func NewClient(ctx context.Context, databaseURL string) (*Client, error) {
 	return &Client{Pool: pool}, nil
 }
 
-// RunMigrations executes the embedded SQL migration.
-func (c *Client) RunMigrations(ctx context.Context) error {
-	if err := c.runMigrations(ctx); err != nil {
-		return fmt.Errorf("postgres: run migrations: %w", err)
+func poolConfig(url string) (*pgxpool.Config, error) {
+	config, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
 	}
-	log.Printf("postgres: migrations applied")
-	return nil
-}
-
-func (c *Client) runMigrations(ctx context.Context) error {
-	if _, err := c.Pool.Exec(ctx, migrationSQL); err != nil {
-		return err
+	connection, err := pgx.ParseConfig(url)
+	if err != nil {
+		return nil, err
 	}
-	if _, err := c.Pool.Exec(ctx, migration002SQL); err != nil {
-		return err
+	if _, ok := connection.RuntimeParams["pool_max_conns"]; !ok {
+		config.MaxConns = 16
 	}
-	if _, err := c.Pool.Exec(ctx, migration003SQL); err != nil {
-		return err
+	if config.ConnConfig.RuntimeParams["statement_timeout"] == "" {
+		config.ConnConfig.RuntimeParams["statement_timeout"] = "30000"
 	}
-	if _, err := c.Pool.Exec(ctx, migration004SQL); err != nil {
-		return err
-	}
-	_, err := c.Pool.Exec(ctx, migration005SQL)
-	return err
+	return config, nil
 }
 
 // InsertDocument inserts a document record.

@@ -20,6 +20,8 @@ Notable changes are grouped by release.
 
 - New documents are indexed only in the default vector namespace; per-document
   namespaces created by earlier versions are still removed on deletion.
+- Database connections default to 16 pooled connections and a 30-second statement
+  timeout unless `DATABASE_URL` sets them.
 - Document labels default to `document` when omitted and are never inferred from
   content; migration 005 changes the database default without relabelling rows.
 - Evidence-backed answers follow the question's language. Empty authorized
@@ -46,6 +48,9 @@ Notable changes are grouped by release.
 
 ### Fixed
 
+- Apply each schema migration once under a PostgreSQL advisory lock and record it
+  in `schema_migrations`, so concurrent replicas start safely and restarts take
+  no table locks.
 - Wait for active requests and accepted ingestion work before closing stores;
   repeated shutdown and concurrent enqueue no longer race channel closure.
 - Persist failure status with a bounded independent context after cancellation.
