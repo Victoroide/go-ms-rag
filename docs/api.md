@@ -9,6 +9,9 @@ All API responses use `Content-Type: application/json`. Error responses follow a
 }
 ```
 
+File content verification and extraction errors also include a stable `code`
+field. Their messages are fixed; parser details are recorded in service logs.
+
 JSON request bodies must be objects. Unknown request fields and duplicate
 top-level keys return 400 with `unknown field "<name>"` or
 `duplicate field "<name>"`. Trailing data after the object also returns 400.
@@ -180,10 +183,23 @@ Form fields:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `file` | file binary | yes | Binary file to extract and ingest. Accepted formats: PDF, DOCX, DOC |
+| `file` | file binary | yes | File to extract and ingest. Accepted formats: PDF, DOCX, DOC and UTF-8 or BOM-marked UTF-16 plain text (`.txt`, `.md`, `.markdown`) |
 | `doc_type` | string | no | Document category label. Defaults to `"document"` if omitted |
 | `document_id` | string | no | Optional document UUID with the same identity and conflict rules as JSON requests, applied to extracted text |
 | `metadata` | JSON object string | no | Optional metadata with the same limits as JSON ingestion; duplicate top-level keys, trailing data and repeated metadata fields return 400. The stored object includes `source_file` set to the uploaded filename, overriding a caller value, and must still fit the size limit |
+
+Uploads are identified by content. PDF headers must appear within the first
+1,024 bytes; DOCX packages must contain a main document part or an
+officeDocument relationship; DOC files must contain a WordDocument entry.
+Plain text requires valid UTF-8 without NUL in an 8 KiB sample, or a UTF-16 BOM.
+Known extensions must match the detected format; mismatches return 415. Files
+with no extension or an unknown extension use the detected format. Content
+that cannot be identified returns 415.
+
+Plain text is decoded in process. Extraction strips a UTF-8 BOM, decodes
+BOM-marked UTF-16, replaces invalid encoding sequences, removes NUL and trims
+surrounding whitespace. The decoded text must fit the 1,000,000-byte limit.
+PDF, DOCX and DOC extraction uses an isolated process.
 
 DOCX extraction supports body text, text boxes, footnotes and endnotes in
 transitional and strict Open XML documents. Headers, footers and comments are
@@ -203,7 +219,7 @@ Error Status Codes:
 | `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
 | `409 Conflict` | `conflict` | Supplied `document_id` already exists with different extracted text |
 | `413 Payload Too Large` | `validation` | Upload exceeds `MAX_UPLOAD_BYTES` |
-| `415 Unsupported Media Type` | `validation` | Uploaded file extension is not pdf, docx, or doc |
+| `415 Unsupported Media Type` | `extraction` | Extension and content disagree, or content has no supported type |
 | `422 Unprocessable Entity` | `extraction` | Document text extraction failed (e.g., malformed binary structure, extracted PDF, DOCX, DOC or text exceeding 1,000,000 bytes, expanded DOCX XML exceeding 16 MiB, a DOC stream declaring a size larger than the file, or PDF extraction work exceeding its limits) |
 | `422 Unprocessable Entity` | `extraction` | Isolated parser failure: `document could not be parsed`; extraction timeout: `document extraction exceeded the time limit` |
 | `503 Service Unavailable` | `busy` | All upload slots remain occupied beyond `EXTRACT_QUEUE_TIMEOUT`: `too many concurrent uploads`, with `Retry-After: 5` |
@@ -211,6 +227,23 @@ Error Status Codes:
 | `503 Service Unavailable` | `storage` | Source upload failed: `source file storage is unavailable`; `Retry-After: 30` |
 | `503 Service Unavailable` | `queue` | Persisted ingestion queue is full; removes a newly uploaded source object; `Retry-After: 30` |
 | `503 Service Unavailable` | `unavailable` | Document lookup or atomic acceptance failed |
+
+Content verification and extraction error codes:
+
+| Code | Status | Fixed message |
+|---|---|---|
+| `type_mismatch` | 415 | `file extension does not match its content` |
+| `unsupported_type` | 415 | `unsupported file type; accepted formats: pdf, docx, doc, txt, md, markdown` |
+| `too_large` | 422 | `extracted text exceeds the size limit` |
+| `timeout` | 422 | `document extraction exceeded the time limit` |
+| `unparseable` | 422 | `document could not be parsed` |
+| `no_text` | 422 | `document contains no readable text` |
+| `encrypted` | 422 | `encrypted documents are not supported` |
+| `unsupported_version` | 422 | `document version is not supported` |
+| `unavailable` | 503 | `document extraction is unavailable` |
+
+For example, a PDF without a readable text layer returns 422 with
+`{"error":"extraction","message":"document contains no readable text","code":"no_text"}`.
 
 Example:
 
