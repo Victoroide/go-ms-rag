@@ -8,6 +8,7 @@ Notable changes are grouped by release.
 
 - Optional Prometheus-format metrics on `METRICS_ADDR` for requests, pipeline stages, ingestion jobs and routing modes.
 - Requests carry an `X-Request-ID`, accepted from callers or generated, that appears in structured access and panic logs; `LOG_LEVEL` sets verbosity.
+- Multipart uploads accept UTF-8 and UTF-16 plain text (`.txt`, `.md`).
 - `SERVICE_TOKENS` accepts several comma-separated tokens for rotation without downtime; tokens are trimmed and compared by digest in constant time.
 - `GET /documents/{doc_id}` reports ingestion status, timestamps and the last error; `GET /documents` accepts `limit` and `after` and reports `status`, `chunk_count` and `created_at`.
 - Use the AWS default credential chain when static keys are not configured, with
@@ -28,6 +29,7 @@ Notable changes are grouped by release.
 
 - The offline vector store rejects records the hosted index would reject (metadata above 40 KB, unsupported metadata types, mismatched dimensions).
 - Use Pinecone API version 2025-10 through the v5 Go SDK; namespace operations share one connection.
+- Uploads are identified by content as well as extension; mismatches return 415; extraction errors return fixed messages with a `code` field.
 - LOCAL retrieval draws evidence from the routed document (named entity or best match) and tops up from the authorized scope when it has fewer than 3 matching chunks; explicit `global` skips the routing probe.
 - Query failures return 504, 503 (with `Retry-After`) or 502 with generic messages; responses report `finish_reason`; HTTP server timeouts are configurable.
 

@@ -4,7 +4,7 @@ Quarry (`quarry-rag`) is a domain-agnostic retrieval-augmented generation (RAG) 
 
 ## Features
 
-- **Durable document ingestion**: Accepts text or PDF, DOCX and DOC uploads into PostgreSQL before responding, with atomic deduplication, parallel processing, leased retries and restart recovery.
+- **Durable document ingestion**: Accepts text or PDF, DOCX, DOC and UTF-8 or UTF-16 plain text uploads into PostgreSQL before responding, with content verification, atomic deduplication, parallel processing, leased retries and restart recovery.
 - **Adaptive retrieval**: Evaluates query complexity and similarity signals to route between LOCAL and GLOBAL vector search in Pinecone.
 - **Tenant and document filtering**: Supports metadata filtering by document type and query-time document ID allowlists enforced before synthesis.
 - **Grounded synthesis**: Generates answers in the language of the incoming question using AWS Bedrock models when evidence is available; empty results return a fixed English no-information answer without synthesis.
