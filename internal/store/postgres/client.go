@@ -70,14 +70,17 @@ func (c *Client) InsertDocument(ctx context.Context, doc domain.Document) error 
 			}
 		}
 	}
-	_, err = c.Pool.Exec(ctx,
+	result, err := c.Pool.Exec(ctx,
 		`INSERT INTO documents (id, content, content_preview, metadata, chunk_count, file_name, file_type, s3_key, doc_type)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		 ON CONFLICT (id) DO UPDATE SET content = $2, content_preview = $3, metadata = $4, chunk_count = $5, file_name = $6, file_type = $7, s3_key = $8, doc_type = $9`,
+		 ON CONFLICT (id) DO NOTHING`,
 		string(doc.ID), doc.Content, doc.ContentPreview, metadataJSON, doc.ChunkCount, doc.FileName, doc.FileType, doc.S3Key, docType,
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: insert document %s: %w", doc.ID, err)
+	}
+	if result.RowsAffected() == 0 {
+		return domain.ErrDocumentExists
 	}
 	return nil
 }

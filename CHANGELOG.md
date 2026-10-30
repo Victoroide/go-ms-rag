@@ -18,6 +18,8 @@ Notable changes are grouped by release.
 
 ### Changed
 
+- Content deduplication applies only to requests without `document_id`;
+  fingerprint lookup failures return 503.
 - New documents are indexed only in the default vector namespace; per-document
   namespaces created by earlier versions are still removed on deletion.
 - Database connections default to 16 pooled connections and a 30-second statement
@@ -53,6 +55,9 @@ Notable changes are grouped by release.
 
 ### Fixed
 
+- Keep caller-supplied document identifiers: identical resubmissions return the
+  same identifier, conflicting content returns 409, malformed identifiers return
+  400, and existing documents are never overwritten.
 - Apply each schema migration once under a PostgreSQL advisory lock and record it
   in `schema_migrations`, so concurrent replicas start safely and restarts take
   no table locks.
