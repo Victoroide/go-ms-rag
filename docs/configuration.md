@@ -1,10 +1,10 @@
 # Configuration
 
-Configuration parameters are loaded exclusively from environment variables at startup via `internal/config/config.go`. The service fails fast during startup if required variables are missing if numerical boundaries are violated, or if numeric and boolean values cannot be parsed. Malformed values are errors rather than silent fallbacks.
+Configuration parameters are loaded exclusively from environment variables at startup via `internal/config/config.go`. Startup fails if required variables are missing, configured values are outside their allowed bounds, or numbers, booleans and durations cannot be parsed. Malformed values are errors rather than silent fallbacks.
 
 ## Environment Variables
 
-The table below lists every environment variable parsed by the service:
+The table below lists the environment variables recognized by the service:
 
 | Variable | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -22,8 +22,8 @@ The table below lists every environment variable parsed by the service:
 | `BEDROCK_PRIMARY_MODEL` | string | `"amazon.nova-micro-v1:0"` | Non-empty string | Bedrock model identifier for low-latency reasoning and fast answer synthesis. |
 | `BEDROCK_FALLBACK_MODEL` | string | `"us.meta.llama4-maverick-17b-instruct-v1:0"` | Non-empty string | Bedrock model identifier for answer synthesis and fallback routing. |
 | `PINECONE_API_KEY` | string | `""` | Non-empty string | API key for authenticating with Pinecone vector indices. Required when `GO_RAG_FAKE_MODE=false`. |
-| `PINECONE_INDEX_NAME` | string | `"go-ms-rag"` | Non-empty string | Name of the target Pinecone index. |
-| `PINECONE_ENVIRONMENT` | string | `""` | String | Pinecone cloud environment identifier. |
+| `PINECONE_INDEX_NAME` | string | None | Required when `GO_RAG_FAKE_MODE=false` | Target Pinecone index, for example `quarry-rag`. There is no implicit default; missing values prevent startup with external services. Optional in offline mode. |
+| `PINECONE_ENVIRONMENT` | string | Unset | Ignored | Has no effect and is not stored in configuration. A non-empty value adds the startup warning `PINECONE_ENVIRONMENT is ignored`. Remove it from deployment configuration. |
 | `PINECONE_UPSERT_BATCH_SIZE` | integer | `100` | 1 to 1000 | Maximum records per vector upsert; each batch also has a 1.5 MiB estimated size limit. |
 | `PINECONE_TIMEOUT` | duration | `10s` | 1s to 2m | Timeout for each vector index request attempt. |
 | `PINECONE_MAX_ATTEMPTS` | integer | `5` | 1 to 10 | Maximum vector write and deletion attempts, including the first attempt; queries use at most three attempts. |

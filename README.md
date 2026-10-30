@@ -92,7 +92,7 @@ To run the containerized application using Docker Compose:
 cp .env.example .env
 ```
 
-Set `S3_BUCKET=your-owned-bucket` in `.env` for original file storage, and optionally set `S3_EXPECTED_BUCKET_OWNER` to the owner's 12-digit AWS account ID. Leaving `S3_BUCKET` empty disables original file storage.
+Set `PINECONE_INDEX_NAME=quarry-rag` to the name of your existing index. External-service mode requires this value and has no implicit default; offline mode does not need it. Set `S3_BUCKET=your-owned-bucket` in `.env` for original file storage, and optionally set `S3_EXPECTED_BUCKET_OWNER` to the owner's 12-digit AWS account ID. Leaving `S3_BUCKET` empty disables original file storage.
 
 2. Start the container in detached mode:
 
@@ -139,6 +139,23 @@ make ci
 ```
 
 `make test` runs the full race suite and needs a Docker daemon for isolated database tests. The Docker `test` stage runs the short suite without a daemon. Delete explicit documents with `make cleanup IDS="<uuid> <uuid>"`.
+
+## Limitations
+
+- **Scanned and image-only PDFs need external OCR.** The extractor reads embedded text and returns 422 with `no_text` when it finds no readable text; no OCR engine is included. Extract text before submitting these documents.
+- **PDF layout fidelity depends on the parser.** Plain-text extraction does not reconstruct table structure or guarantee reading order and spacing in complex layouts. Check extracted content when layout carries meaning.
+- **Encrypted DOC files and Word 6/95 binaries are unsupported.** The DOC reader returns 422 with `encrypted` or `unsupported_version`, and the API accepts no decryption password. Convert these documents before uploading them.
+- **Completion does not guarantee immediate search visibility.** PostgreSQL records completion after vector writes, but the hosted index is eventually consistent. After successful deletion, the PostgreSQL visibility check excludes the document from new answers even if vectors remain in the index temporarily.
+- **Ingestion processing is at least once.** Expired leases can cause an attempt to repeat, and a crash between external writes and cleanup can leave orphaned vectors. PostgreSQL and the vector index do not share a transaction; vectors without a completed document are excluded from answers. With ingestion paused, `make reconcile` previews eligible cleanup; deletion requires `ARGS="-apply"` and preserves processing documents and retryable jobs.
+- **Prompt injection remains possible.** Excerpt delimiters, character sanitization and synthesis instructions reduce exposure, but hostile text in authorized documents can still influence generated answers.
+- **Token counts are estimates.** The service uses text heuristics instead of a provider tokenizer. Chunk token estimates and the 30,000-byte chunk cap bound input size, but do not guarantee exact token counts or acceptance by every configured provider.
+- **Individual-user authorization belongs to the caller.** Service credentials authenticate trusted applications. Those applications must supply each user's `allowed_document_ids`; `REQUIRE_DOCUMENT_ALLOWLIST` can require that field, but the service does not determine which documents a user may read.
+- **Content deduplication can reveal that identical content exists.** Requests without `document_id` share content fingerprints. Supply a distinct identifier when documents need independent identities; this disables deduplication across identifiers for that request.
+- **Concurrency limits apply per replica.** Query admission, embedding and extraction limits are process-local, so total concurrency grows with the replica count. Configure replica counts, retries and per-process limits to fit upstream quotas.
+- **The no-evidence answer is fixed English.** Empty authorized results skip synthesis and return `No relevant information was found to answer this question.` Evidence-backed synthesis is instructed to follow the question's language.
+- **Document allowlists have size limits.** `MAX_ALLOWED_DOCUMENT_IDS` defaults to 25,000 entries before deduplication, and the 1 MiB query-body cap also applies. These bounds limit request size and the number of vector queries needed for large scopes.
+- **The service does not export distributed traces.** Request IDs, structured logs and metrics provide correlation; no trace exporter or collector integration is configured.
+- **Offline mode does not measure hosted behavior.** Its vector writes are immediately consistent and its answer generator echoes prompt context. It exercises contracts and storage limits, while answer quality and hosted-index latency require external-service testing.
 
 ## Documentation
 

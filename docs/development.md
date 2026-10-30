@@ -58,27 +58,28 @@ make ci
 
 ### 1. Unit Tests
 
-Unit tests execute without external dependencies, testing pure domain functions, data parsing, and mock-backed pipeline logic.
+Unit tests cover domain functions, data parsing, HTTP behavior and pipeline logic using local implementations. They live beside the packages under `internal/` as well as in `test/unit/`. The short suite runs these tests and skips database-backed integration tests:
 
 ```sh
-go test ./test/unit/... -count=1 -v
+go test -short -race -count=1 ./...
 ```
 
 Scope of unit tests:
 - **Chunker (`chunker_test.go`)**: Validates word window boundaries, token approximation formulas, HTML sanitization, and SHA-256 fingerprint generation.
-- **Extractor (`extractor_test.go`)**: Validates text extraction from synthetic PDF, DOCX, DOC, and plain text buffers, including XML expansion limits and context cancellations.
+- **Extractor (`test/unit/extractor_test.go`, `internal/extractor/*_test.go`, `internal/api/handler/ingest_detect_test.go`)**: Covers synthetic PDF, DOCX and plain text, content detection and extension mismatches, stable extraction error codes, decoded-text and XML limits, parser isolation, and cancellation.
 - **DOC (`internal/extractor/doc_test.go`)**: Covers Word 97–2003 piece tables, Windows-1252 and UTF-16 text, nested field codes, corrupt structures, encrypted and older files, and decoded-text limits.
 - **Fake Mode (`fakemode_test.go`)**: Verifies deterministic in-memory vector storage, mock embeddings, and fake converser outputs.
 - **Named Entities (`named_entity_test.go`)**: Tests proper noun phrase extraction, stop-word filtering, and Unicode capitalization handling.
-- **Retriever (`retriever_test.go`)**: Verifies LOCAL vs. GLOBAL mode determination, similarity score thresholding, and fallback search triggering when fewer than 3 chunks are returned.
+- **Retriever (`test/unit/retriever_test.go`, `internal/retriever/retriever_test.go`, `internal/pipeline/local_test.go`)**: Covers scoped retrieval, document selection, similarity thresholds and the LOCAL top-up when fewer than three chunks are returned.
 - **Router (`router_test.go`)**: Validates model selection decisions across task types, context token thresholds, and synthesis modes.
 
 ### 2. Integration Tests
 
-Integration tests verify database persistence, transactional rollbacks, schema migrations, and pipeline execution. Tests use Testcontainers to spin up isolated PostgreSQL containers automatically during execution.
+Integration tests verify database persistence, transactional rollbacks, schema migrations, and pipeline execution. Tests in `test/integration/`, `internal/store/postgres/` and `scripts/reconcile/postgres_test.go` use Testcontainers to start isolated PostgreSQL containers automatically during execution.
 
 ```sh
 go test -race -count=1 ./test/integration/...
+go test -race -count=1 ./internal/store/postgres/...
 ```
 
 Docker must be running locally to permit Testcontainers to manage the ephemeral PostgreSQL database instance. Database-backed tests skip under `go test -short` with an explicit daemon requirement message; CI runs the full suite without `-short`. The offline query test ingests through HTTP, polls document status until completion, and verifies cited evidence and document restrictions through the router.

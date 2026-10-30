@@ -28,6 +28,9 @@ Notable changes are grouped by release.
 
 ### Changed
 
+- **Breaking:** `PINECONE_INDEX_NAME` has no implicit default and is required when external services are enabled; missing values prevent startup. Offline mode does not require it.
+- Examples use the index name `quarry-rag`.
+- `PINECONE_ENVIRONMENT` is ignored, is no longer stored in configuration, and emits a startup warning when non-empty.
 - The offline vector store rejects records the hosted index would reject (metadata above 40 KB, unsupported metadata types, mismatched dimensions).
 - Use Pinecone API version 2025-10 through the v5 Go SDK; namespace operations share one connection.
 - Uploads are identified by content as well as extension; mismatches return 415; extraction errors return fixed messages with a `code` field.
