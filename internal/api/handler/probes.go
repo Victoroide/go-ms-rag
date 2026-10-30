@@ -2,7 +2,7 @@ package handler
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,7 +71,7 @@ func (p *Probes) check(ctx context.Context) HealthStatus {
 			probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			if err := ping(probeCtx); err != nil {
-				log.Printf("health: %s probe failed: %v", name, err)
+				slog.WarnContext(probeCtx, "health probe failed", "dependency", name, "error", err)
 				*value = "unreachable"
 			}
 		})

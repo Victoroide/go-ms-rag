@@ -6,7 +6,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -63,7 +63,7 @@ func (c *Client) RunMigrations(ctx context.Context) error {
 	if err := c.runMigrations(ctx); err != nil {
 		return fmt.Errorf("postgres: run migrations: %w", err)
 	}
-	log.Printf("postgres: migrations applied")
+	slog.InfoContext(ctx, "postgres migrations applied")
 	return nil
 }
 

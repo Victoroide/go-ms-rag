@@ -5,7 +5,7 @@ package retriever
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"slices"
 	"sort"
 
@@ -127,28 +127,13 @@ func (r *Retriever) RetrieveWithEmbedding(ctx context.Context, embedding []float
 		topScore = chunks[0].Score
 	}
 
-	log.Printf("retrieval: mode=%s chunks=%d similarity=%.4f", mode, len(chunks), topScore)
+	slog.DebugContext(ctx, "retrieval completed", "mode", mode, "chunks", len(chunks), "similarity", topScore)
 
 	return &Result{
 		Chunks:   chunks,
 		Mode:     mode,
 		TopScore: topScore,
 	}, nil
-}
-
-// DetermineMode decides LOCAL or GLOBAL mode based on sub-query count
-// and embedding similarity score.
-//
-// LOCAL mode criteria:
-//   - One or fewer sub-queries AND similarity >= threshold AND not a multi-entity query
-//
-// GLOBAL mode criteria:
-//   - Two or more sub-queries OR similarity < threshold OR multi-entity query
-func (r *Retriever) DetermineMode(subQueryCount int, topScore float64) RetrievalMode {
-	if subQueryCount <= 1 && topScore >= r.threshold {
-		return RetrievalModeLocal
-	}
-	return RetrievalModeGlobal
 }
 
 // DetermineModeWithQuery decides LOCAL or GLOBAL mode using structural signals only.
@@ -187,7 +172,7 @@ func (r *Retriever) EmbedQuery(ctx context.Context, query string, filter domain.
 	}
 	candidates, err = r.queryFiltered(ctx, embedding, probeK, filter)
 	if err != nil {
-		log.Printf("retriever: routing probe failed; using GLOBAL retrieval: %v", err)
+		slog.WarnContext(ctx, "routing probe failed", "mode", RetrievalModeGlobal, "error", err)
 		return embedding, nil, true, nil
 	}
 	return embedding, candidates, false, nil

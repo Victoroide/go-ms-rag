@@ -69,7 +69,7 @@ func TestSynthesisIsCalledOncePerAttemptPolicy(t *testing.T) {
 				qc := &QueryContext{OriginalQuery: "archive", RetrievedChunks: []domain.ScoredChunk{{Chunk: domain.Chunk{Text: "evidence"}, Score: .9}}}
 				require.Error(t, NewSynthesisStage(amb, cfg).Run(ctx, qc))
 			} else {
-				_, err := amb.Converse(ctx, nil)
+				_, err := amb.ConverseRoutedPlain(ctx, "fallback", "", nil, 0, 1024)
 				require.Error(t, err)
 			}
 			require.Equal(t, 1, client.calls)
@@ -91,7 +91,7 @@ func TestSynthesisTimeoutCancelsUpstream(t *testing.T) {
 func TestQueryTextIsNotLogged(t *testing.T) {
 	var buf bytes.Buffer
 	old, flags := slog.Default(), log.Flags()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer func() { slog.SetDefault(old); log.SetFlags(flags) }()
 	qc := &QueryContext{OriginalQuery: "private archive question 927"}
 	store := memory.NewFakeVectorStore()
@@ -108,6 +108,7 @@ func TestQueryTextIsNotLogged(t *testing.T) {
 	digest := sha256.Sum256([]byte(qc.OriginalQuery))
 	require.Contains(t, buf.String(), fmt.Sprintf("%x", digest[:6]))
 	require.NotContains(t, buf.String(), "private archive")
+	require.NotContains(t, buf.String(), "Archive evidence")
 }
 
 func TestDefaultMinimumRelevancePreservesRetrievedEvidence(t *testing.T) {

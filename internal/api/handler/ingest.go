@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -116,13 +115,13 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 	}
 	r.Body = http.MaxBytesReader(rw, r.Body, maxUploadBytes)
 
-	defer func() {
+	defer func(ctx context.Context) {
 		if r.MultipartForm != nil {
 			if err := r.MultipartForm.RemoveAll(); err != nil {
-				log.Printf("ingest: remove multipart temporary files: %v", err)
+				slog.WarnContext(ctx, "remove multipart temporary files", "error", err)
 			}
 		}
-	}()
+	}(r.Context())
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		var tooLarge *http.MaxBytesError
@@ -133,11 +132,11 @@ func handleFileIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker
 		writeJSONError(rw, http.StatusBadRequest, "validation", "file field is required")
 		return
 	}
-	defer func() {
+	defer func(ctx context.Context) {
 		if closeErr := file.Close(); closeErr != nil {
-			log.Printf("ingest: close file: %v", closeErr)
+			slog.WarnContext(ctx, "close uploaded file", "error", closeErr)
 		}
-	}()
+	}(r.Context())
 
 	// Read the entire file into memory for extraction and S3 upload.
 	fileData, err := io.ReadAll(file)

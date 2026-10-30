@@ -98,11 +98,11 @@ func TestFakeVectorStoreQueryFilterDelete(t *testing.T) {
 func TestFakeConverserGrounded(t *testing.T) {
 	amb := llm.NewAmbassador(nil)
 	amb.SetClient(llm.NewFakeConverser())
-	out, err := amb.Converse(context.Background(), nil)
+	out, err := amb.ConverseRoutedPlain(context.Background(), "fallback", "", nil, 0, 1024)
 	if err != nil {
 		t.Fatalf("converse: %v", err)
 	}
-	if txt := llm.ExtractText(out); txt == "" {
+	if txt := out.Text; txt == "" {
 		t.Fatal("fake converser returned empty text")
 	}
 }

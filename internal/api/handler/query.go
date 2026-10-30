@@ -3,7 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -200,12 +200,12 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 			ScoredChunks:  scoredChunks,
 		}
 
-		log.Printf("query: mode=%s chunks=%d duration=%s", qc.RetrievalMode, len(qc.RetrievedChunks), time.Since(start))
+		slog.DebugContext(r.Context(), "query completed", "mode", qc.RetrievalMode, "chunks", len(qc.RetrievedChunks), "duration", time.Since(start))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			log.Printf("query: encode response: %v", err)
+			slog.ErrorContext(r.Context(), "encode query response", "error", err)
 		}
 	}
 }
@@ -215,6 +215,6 @@ func writeJSONError(w http.ResponseWriter, code int, errType, message string) {
 	w.WriteHeader(code)
 	resp := APIError{Error: errType, Message: message}
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("error: encode error response: %v", err)
+		slog.Error("encode error response", "error", err)
 	}
 }

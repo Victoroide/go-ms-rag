@@ -41,12 +41,12 @@ func TestLocalModeThreshold(t *testing.T) {
 	ret := retriever.NewRetriever(nil, nil, 0.70, 10)
 
 	// Single sub-query + high similarity -> LOCAL.
-	mode := ret.DetermineMode(1, 0.85)
+	mode := ret.DetermineModeWithQuery(1, 0.85, "")
 	assert.Equal(t, retriever.RetrievalModeLocal, mode,
 		"single sub-query with high similarity should route to LOCAL")
 
 	// Single sub-query + exact threshold -> LOCAL.
-	mode2 := ret.DetermineMode(1, 0.70)
+	mode2 := ret.DetermineModeWithQuery(1, 0.70, "")
 	assert.Equal(t, retriever.RetrievalModeLocal, mode2,
 		"single sub-query at threshold should route to LOCAL")
 }
@@ -60,12 +60,12 @@ func TestGlobalModeFallback(t *testing.T) {
 	ret := retriever.NewRetriever(vs, emb, 0.70, 10)
 
 	// Multiple sub-queries -> GLOBAL.
-	mode := ret.DetermineMode(3, 0.50)
+	mode := ret.DetermineModeWithQuery(3, 0.50, "")
 	assert.Equal(t, retriever.RetrievalModeGlobal, mode,
 		"multiple sub-queries should route to GLOBAL")
 
 	// Low similarity with single sub-query -> GLOBAL.
-	mode2 := ret.DetermineMode(1, 0.50)
+	mode2 := ret.DetermineModeWithQuery(1, 0.50, "")
 	assert.Equal(t, retriever.RetrievalModeGlobal, mode2,
 		"low similarity should route to GLOBAL")
 

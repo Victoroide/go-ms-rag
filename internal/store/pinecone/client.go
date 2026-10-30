@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"sync"
 	"time"
@@ -57,7 +57,7 @@ func NewPineconeClient(ctx context.Context, cfg *config.Config) (*Client, error)
 		return nil, fmt.Errorf("pinecone: connect to default namespace: %w", err)
 	}
 	p := newClient(pc, cfg, defaultConn)
-	log.Printf("pinecone: connected to index %q (host=%s, dimension=%d)", cfg.PineconeIndexName, idx.Host, *idx.Dimension)
+	slog.InfoContext(ctx, "pinecone connected", "index", cfg.PineconeIndexName, "host", idx.Host, "dimensions", *idx.Dimension)
 	return p, nil
 }
 
@@ -140,7 +140,7 @@ func (p *Client) Upsert(ctx context.Context, namespace string, chunks []domain.C
 		}
 		start = end
 	}
-	log.Printf("pinecone: upserted %d vectors to namespace %q", len(vectors), namespace)
+	slog.DebugContext(ctx, "pinecone vectors upserted", "vectors", len(vectors), "namespace", namespace)
 	return nil
 }
 
@@ -211,7 +211,7 @@ func (p *Client) DeleteAllVectorsInNamespace(ctx context.Context, namespace stri
 	}); err != nil {
 		return fmt.Errorf("pinecone: delete all vectors in namespace %q: %w", namespace, err)
 	}
-	log.Printf("pinecone: deleted all vectors in namespace %q", namespace)
+	slog.DebugContext(ctx, "pinecone namespace cleared", "namespace", namespace)
 	return nil
 }
 
@@ -231,7 +231,7 @@ func (p *Client) DeleteByDocID(ctx context.Context, docID string) error {
 	if err != nil {
 		return fmt.Errorf("pinecone: delete vectors by doc_id %s: %w", docID, err)
 	}
-	log.Printf("pinecone: deleted vectors from default namespace for doc_id=%s", docID)
+	slog.DebugContext(ctx, "pinecone document vectors deleted", "document_id", docID)
 	return nil
 }
 
@@ -273,23 +273,6 @@ func ignoreNotFound(err error) error {
 		return nil
 	}
 	return err
-}
-
-// DescribeIndexStats returns index-level statistics including namespace counts.
-func (p *Client) DescribeIndexStats(ctx context.Context) (*pinecone.DescribeIndexStatsResponse, error) {
-	conn, ok := p.defaultConn.(interface {
-		DescribeIndexStats(context.Context) (*pinecone.DescribeIndexStatsResponse, error)
-	})
-	if !ok {
-		return nil, errors.New("pinecone: index statistics are unavailable")
-	}
-	var res *pinecone.DescribeIndexStatsResponse
-	err := p.do(ctx, min(3, p.maxAttempts), func(attemptCtx context.Context) error {
-		var statsErr error
-		res, statsErr = conn.DescribeIndexStats(attemptCtx)
-		return statsErr
-	})
-	return res, err
 }
 
 // Ping verifies connectivity to the Pinecone index.

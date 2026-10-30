@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/Victoroide/quarry-rag/internal/domain"
 	"github.com/jackc/pgx/v5"
@@ -33,7 +33,7 @@ func NewClient(ctx context.Context, databaseURL string) (*Client, error) {
 		pool.Close()
 		return nil, fmt.Errorf("postgres: ping: %w", err)
 	}
-	log.Printf("postgres: connected")
+	slog.InfoContext(ctx, "postgres connected")
 	return &Client{Pool: pool}, nil
 }
 
