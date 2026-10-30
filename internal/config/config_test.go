@@ -23,6 +23,7 @@ func baseValidConfig() *Config {
 		PineconeUpsertBatchSize: 100,
 		PineconeTimeout:         10 * time.Second,
 		PineconeMaxAttempts:     5,
+		ExtractIsolation:        true, ExtractTimeout: 30 * time.Second, ExtractConcurrency: 2, ExtractMemoryLimitMB: 512, ExtractQueueTimeout: 5 * time.Second,
 	}
 }
 
