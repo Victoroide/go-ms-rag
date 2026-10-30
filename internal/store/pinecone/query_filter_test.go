@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/Victoroide/quarry-rag/internal/domain"
-	"github.com/pinecone-io/go-pinecone/pinecone"
+	"github.com/pinecone-io/go-pinecone/v5/pinecone"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
 )
