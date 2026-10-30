@@ -1,6 +1,6 @@
 // Package chunker splits raw documents into token-bounded chunks
 // with semantic-boundary awareness. The chunker first normalizes the
-// raw extract (NFKC, hyphenation, decoration noise), then walks
+// raw extract (NFC, width folding, hyphenation, decoration noise), then walks
 // paragraphs and sentences building chunks that try to honor structure
 // instead of slicing mid-word. Each chunk is tagged with a (kind,
 // quality) classification that retrieval can use to de-prioritize
@@ -10,7 +10,6 @@ package chunker
 import (
 	"crypto/sha256"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -39,14 +38,12 @@ func NewChunker(chunkSize, overlap int) *Chunker {
 	}
 }
 
-var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
-
 // Chunk splits text into Chunks of approximately chunkSize tokens.
 //
 // The strategy:
 //
-//  1. Strip HTML.
-//  2. Normalise for ingest: NFKC + hyphenation fix + paragraph-aware
+//  1. Strip HTML when recognizable markup is present.
+//  2. Normalise for ingest: NFC, width folding, hyphenation fix and paragraph-aware
 //     line break handling (via textutil.NormalizeForIngest).
 //  3. Split into paragraphs.
 //  4. Within a paragraph, split into sentences.
@@ -205,10 +202,6 @@ func Fingerprint(content string) string {
 // ChunkFingerprint computes a SHA-256 hex fingerprint for a single chunk.
 func ChunkFingerprint(text string) string {
 	return Fingerprint(text)
-}
-
-func stripHTML(s string) string {
-	return htmlTagRe.ReplaceAllString(s, "")
 }
 
 func approximateTokens(words []string) int {

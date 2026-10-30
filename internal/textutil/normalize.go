@@ -12,16 +12,17 @@ import (
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
+	"golang.org/x/text/width"
 )
 
 // NormalizeForIngest cleans a freshly extracted document so that the
 // chunker downstream sees well-formed prose. The order of operations
 // matters and is deliberately conservative:
 //
-//  1. NFKC unicode normalization (folds ligatures, full-width digits,
-//     compatibility CJK forms — common PDF artifacts).
-//  2. Strip true control characters and zero-width junk, but keep
-//     newlines and tabs since they encode structure.
+//  1. Normalize line endings, then apply NFC and width folding without
+//     changing superscripts, fractions or circled numbers.
+//  2. Fold common ligatures and space variants, remove Unicode format
+//     characters, and replace controls except newlines and tabs with spaces.
 //  3. Fix soft hyphenation across line breaks ("docu-\n  ments" →
 //     "documents"). PDF extractors emit these because the original
 //     document was justified.
@@ -39,9 +40,12 @@ func NormalizeForIngest(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	// 1. NFKC normalization.
-	s := norm.NFKC.String(raw)
-	// 2. Strip control characters but keep \n and \t.
+	// 1. Preserve line structure before filtering controls.
+	s := ingestLineEndings.Replace(raw)
+	s = norm.NFC.String(s)
+	s = width.Fold.String(s)
+	// 2. Fold selected compatibility characters and filter controls.
+	s = ingestCharacterFolds.Replace(s)
 	s = stripControlExceptStructure(s)
 	// 3. Fix hyphenation across line breaks.
 	s = hyphenLineBreakRe.ReplaceAllString(s, "")
@@ -49,11 +53,8 @@ func NormalizeForIngest(raw string) string {
 	s = decorationRunRe.ReplaceAllString(s, " ")
 	s = bulletRunRe.ReplaceAllString(s, " ")
 	// 5. Re-flow paragraphs:
-	//    - normalize CRLF / CR to LF
 	//    - collapse 2+ newlines to a single placeholder so we don't
 	//      eat real paragraph boundaries when we join soft lines
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
 	s = paragraphBreakRe.ReplaceAllString(s, paragraphPlaceholder)
 	// Now any remaining single \n is a soft wrap inside a paragraph.
 	s = strings.ReplaceAll(s, "\n", " ")
@@ -71,6 +72,12 @@ func NormalizeForIngest(raw string) string {
 const paragraphPlaceholder = "\x00P\x00"
 
 var (
+	ingestLineEndings    = strings.NewReplacer("\r\n", "\n", "\r", "\n", "\u2028", "\n", "\u2029", "\n\n")
+	ingestCharacterFolds = strings.NewReplacer(
+		"\ufb00", "ff", "\ufb01", "fi", "\ufb02", "fl", "\ufb03", "ffi",
+		"\ufb04", "ffl", "\ufb05", "st", "\ufb06", "st",
+		"\u00a0", " ", "\u2007", " ", "\u202f", " ", "\u3000", " ",
+	)
 	// hyphenLineBreakRe matches a hyphen at end-of-line followed by
 	// whitespace — the typical PDF-justified word break.
 	hyphenLineBreakRe = regexp.MustCompile(`-\s*\n\s*`)
@@ -94,8 +101,7 @@ func stripControlExceptStructure(s string) string {
 		switch {
 		case r == '\n' || r == '\t':
 			b.WriteRune(r)
-		case isZeroWidth(r):
-			// Zero-width chars (ZWSP, ZWNJ, ZWJ, BOM, etc.) — drop entirely.
+		case unicode.Is(unicode.Cf, r):
 			continue
 		case unicode.IsControl(r):
 			// Replace control chars with a space so word boundaries
@@ -108,23 +114,15 @@ func stripControlExceptStructure(s string) string {
 	return b.String()
 }
 
-// isZeroWidth recognizes the zero-width characters that frequently
-// leak in from PDF/DOCX extraction (most often the BOM and the various
-// zero-width spaces). Encoded by rune value so the Go source file
-// itself stays free of stray BOMs.
-func isZeroWidth(r rune) bool {
-	switch r {
-	case 0x200B, // ZERO WIDTH SPACE
-		0x200C,                                 // ZERO WIDTH NON-JOINER
-		0x200D,                                 // ZERO WIDTH JOINER
-		0x200E,                                 // LEFT-TO-RIGHT MARK
-		0x200F,                                 // RIGHT-TO-LEFT MARK
-		0x202A, 0x202B, 0x202C, 0x202D, 0x202E, // bidi formatting
-		0x2060, // WORD JOINER
-		0xFEFF: // ZERO WIDTH NO-BREAK SPACE / BOM
-		return true
-	}
-	return false
+// SanitizeForPrompt removes Unicode format characters and controls except
+// newlines and tabs, preserving all other text and whitespace.
+func SanitizeForPrompt(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) || (unicode.IsControl(r) && r != '\n' && r != '\t') {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // SplitParagraphs returns the paragraphs of a normalized document.
