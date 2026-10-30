@@ -63,6 +63,7 @@ Notable changes are grouped by release.
 ### Fixed
 
 - `GET /documents` returns an empty array instead of `null` and streams large listings.
+- Preserve superscripts, fractions, circled numbers and text between comparison operators during ingestion; keep carriage-return paragraph breaks; strip HTML only from documents that contain markup.
 - Retain source files for caller-owned documents with identical text and after uncertain acceptance results; bound acceptance independently of caller cancellation.
 - Clear existing vectors before each ingestion attempt and again after document deletion; perform terminal cleanup under the live lease before recording failure.
 - Reject NUL characters in document labels before storage.
@@ -97,6 +98,7 @@ Notable changes are grouped by release.
 
 ### Security
 
+- Remove invisible Unicode format characters, such as tag characters and bidirectional isolates, from ingested text.
 - Apply document allowlists and type filters inside every vector query, including
   the routing probe, and derive entity routing only from authorized candidates.
 
