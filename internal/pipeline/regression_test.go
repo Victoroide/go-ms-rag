@@ -53,7 +53,7 @@ func TestExtractNamedEntityUnicodeAndConnectors(t *testing.T) {
 }
 func TestDecompositionWithoutDatabase(t *testing.T) {
 	qc := &QueryContext{OriginalQuery: "List all documents"}
-	if err := NewDecomposeStage(nil).Run(t.Context(), qc); err != nil {
+	if err := NewDecomposeStage().Run(t.Context(), qc); err != nil {
 		t.Fatal(err)
 	}
 	if len(qc.SubQueries) != 2 {

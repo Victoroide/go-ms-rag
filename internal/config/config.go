@@ -60,11 +60,13 @@ type Config struct {
 	PineconeTimeout         time.Duration
 	PineconeMaxAttempts     int
 
-	ExtractIsolation     bool
-	ExtractTimeout       time.Duration
-	ExtractConcurrency   int
-	ExtractMemoryLimitMB int
-	ExtractQueueTimeout  time.Duration
+	ExtractIsolation         bool
+	ExtractTimeout           time.Duration
+	ExtractConcurrency       int
+	ExtractMemoryLimitMB     int
+	ExtractQueueTimeout      time.Duration
+	MaxAllowedDocumentIDs    int
+	RequireDocumentAllowlist bool
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -98,6 +100,7 @@ func Load() (*Config, error) {
 		{"PINECONE_UPSERT_BATCH_SIZE", &cfg.PineconeUpsertBatchSize, 100},
 		{"PINECONE_MAX_ATTEMPTS", &cfg.PineconeMaxAttempts, 5},
 		{"EXTRACT_CONCURRENCY", &cfg.ExtractConcurrency, 2}, {"EXTRACT_MEMORY_LIMIT_MB", &cfg.ExtractMemoryLimitMB, 512},
+		{"MAX_ALLOWED_DOCUMENT_IDS", &cfg.MaxAllowedDocumentIDs, 25000},
 	} {
 		value, err := envIntOrDefault(setting.key, setting.fallback)
 		if err != nil {
@@ -125,6 +128,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.ExtractQueueTimeout, err = envDurationOrDefault("EXTRACT_QUEUE_TIMEOUT", 5*time.Second); err != nil {
+		return nil, err
+	}
+
+	if cfg.RequireDocumentAllowlist, err = envBoolOrDefault("REQUIRE_DOCUMENT_ALLOWLIST", false); err != nil {
 		return nil, err
 	}
 
@@ -226,6 +233,9 @@ func (c *Config) validate() error {
 	}
 	if c.ExtractQueueTimeout < 0 || c.ExtractQueueTimeout > time.Minute {
 		return fmt.Errorf("config: EXTRACT_QUEUE_TIMEOUT must be between 0s and 60s")
+	}
+	if c.MaxAllowedDocumentIDs < 1 || c.MaxAllowedDocumentIDs > 100000 {
+		return fmt.Errorf("config: MAX_ALLOWED_DOCUMENT_IDS must be between 1 and 100000")
 	}
 	return nil
 }

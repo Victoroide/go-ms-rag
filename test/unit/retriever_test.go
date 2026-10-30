@@ -16,6 +16,7 @@ import (
 type mockVectorStore struct {
 	queryResult    []domain.ScoredChunk
 	queryAllResult []domain.ScoredChunk
+	queryAllCalls  int
 }
 
 func (m *mockVectorStore) Upsert(_ context.Context, _ string, _ []domain.Chunk) error { return nil }
@@ -23,6 +24,7 @@ func (m *mockVectorStore) Query(_ context.Context, _ string, _ []float32, _ int,
 	return m.queryResult, nil
 }
 func (m *mockVectorStore) QueryAllNamespaces(_ context.Context, _ []float32, _ int, _ string) ([]domain.ScoredChunk, error) {
+	m.queryAllCalls++
 	return m.queryAllResult, nil
 }
 func (m *mockVectorStore) Delete(_ context.Context, _ string, _ []string) error { return nil }
@@ -67,11 +69,11 @@ func TestGlobalModeFallback(t *testing.T) {
 	assert.Equal(t, retriever.RetrievalModeGlobal, mode2,
 		"low similarity should route to GLOBAL")
 
-	// Test actual retrieve with 0 results triggers fallback.
-	result, err := ret.Retrieve(context.Background(), "test query", retriever.RetrievalModeGlobal, "", 10, "")
+	// Sparse global results require only one vector query.
+	result, err := ret.Retrieve(context.Background(), "test query", retriever.RetrievalModeGlobal, 10, domain.VectorFilter{})
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	// Even with 0 results, the fallback runs but still gets 0 from mock.
+	require.Equal(t, 1, vs.queryAllCalls)
 	assert.Equal(t, retriever.RetrievalModeGlobal, result.Mode)
 }
 
@@ -90,11 +92,11 @@ func (s *transientProbeStore) QueryAllNamespaces(context.Context, []float32, int
 func TestRoutingProbeFailureFallsBackToGlobal(t *testing.T) {
 	store := &transientProbeStore{}
 	ret := retriever.NewRetriever(store, &mockEmbedder{}, 0.7, 10)
-	embedding, score, failed, err := ret.EmbedQuery(t.Context(), "archive")
+	embedding, score, failed, err := ret.EmbedQuery(t.Context(), "archive", domain.VectorFilter{}, 5)
 	require.NoError(t, err)
 	require.True(t, failed)
 	require.Zero(t, score)
-	result, err := ret.RetrieveWithEmbedding(t.Context(), embedding, retriever.RetrievalModeGlobal, "", 10, "")
+	result, err := ret.RetrieveWithEmbedding(t.Context(), embedding, retriever.RetrievalModeGlobal, 10, domain.VectorFilter{})
 	require.NoError(t, err)
 	require.Len(t, result.Chunks, 1)
 }

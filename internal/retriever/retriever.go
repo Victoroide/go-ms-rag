@@ -1,5 +1,5 @@
 // Package retriever implements LOCAL/GLOBAL adaptive retrieval
-// using Pinecone vector search with fallback logic.
+// using scoped vector search.
 package retriever
 
 import (
@@ -11,11 +11,7 @@ import (
 	"github.com/Victoroide/quarry-rag/internal/domain"
 )
 
-const (
-	defaultTopK            = 10
-	fallbackMinChunks      = 3
-	defaultSimilarityLimit = 20
-)
+const defaultTopK = 10
 
 // RetrievalMode selects between local and global retrieval strategies.
 type RetrievalMode string
@@ -58,53 +54,28 @@ type Result struct {
 //
 // If the caller already produced an embedding for the query (e.g. the
 // routing stage), it can be passed via RetrieveWithEmbedding to avoid
-// a redundant Bedrock embed call. This wrapper keeps the original
-// signature and embeds on demand.
-func (r *Retriever) Retrieve(ctx context.Context, query string, mode RetrievalMode, namespace string, topK int, docTypeFilter string) (*Result, error) {
+// a redundant Bedrock embed call. This wrapper embeds on demand.
+func (r *Retriever) Retrieve(ctx context.Context, query string, mode RetrievalMode, topK int, filter domain.VectorFilter) (*Result, error) {
+	if filter.MatchesNothing() {
+		return &Result{Mode: mode}, nil
+	}
 	embedding, err := r.embedder.Embed(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("retriever: embed query: %w", err)
 	}
-	return r.RetrieveWithEmbedding(ctx, embedding, mode, namespace, topK, docTypeFilter)
+	return r.RetrieveWithEmbedding(ctx, embedding, mode, topK, filter)
 }
 
 // RetrieveWithEmbedding runs the retrieval pipeline against a caller-
 // supplied query embedding. Used by the query stage chain to avoid
 // embedding the same text twice (once in routing, once here).
-func (r *Retriever) RetrieveWithEmbedding(ctx context.Context, embedding []float32, mode RetrievalMode, namespace string, topK int, docTypeFilter string) (*Result, error) {
+func (r *Retriever) RetrieveWithEmbedding(ctx context.Context, embedding []float32, mode RetrievalMode, topK int, filter domain.VectorFilter) (*Result, error) {
 	if topK <= 0 {
 		topK = r.topK
 	}
-	var err error
-	var chunks []domain.ScoredChunk
-
-	switch mode {
-	case RetrievalModeLocal:
-		chunks, err = r.retrieveLocal(ctx, namespace, embedding, topK, docTypeFilter)
-	case RetrievalModeGlobal:
-		chunks, err = r.retrieveGlobal(ctx, embedding, topK, docTypeFilter)
-	default:
-		chunks, err = r.retrieveGlobal(ctx, embedding, topK, docTypeFilter)
-	}
+	chunks, err := r.queryFiltered(ctx, embedding, topK, filter)
 	if err != nil {
-		return nil, err
-	}
-
-	// Fallback: if GLOBAL returns < 3 chunks, run unrestricted search.
-	if mode == RetrievalModeGlobal && len(chunks) < fallbackMinChunks {
-		log.Printf("retrieval: GLOBAL returned %d chunks (< %d), running fallback", len(chunks), fallbackMinChunks)
-		fallbackChunks, fbErr := r.vectorStore.QueryAllNamespaces(ctx, embedding, defaultSimilarityLimit, docTypeFilter)
-		if fbErr == nil && len(fallbackChunks) > 0 {
-			existing := make(map[domain.ChunkID]bool)
-			for _, c := range chunks {
-				existing[c.Chunk.ID] = true
-			}
-			for _, fc := range fallbackChunks {
-				if !existing[fc.Chunk.ID] {
-					chunks = append(chunks, fc)
-				}
-			}
-		}
+		return nil, fmt.Errorf("retriever: query: %w", err)
 	}
 
 	// Sort by score descending.
@@ -168,41 +139,58 @@ func (r *Retriever) DetermineModeWithQuery(subQueryCount int, topScore float64, 
 	return RetrievalModeGlobal
 }
 
-// EmbedQuery generates an embedding for a query string.
-func (r *Retriever) EmbedQuery(ctx context.Context, query string) (embedding []float32, topScore float64, probeFailed bool, err error) {
+// EmbedQuery embeds the query and optionally probes the authorized scope.
+func (r *Retriever) EmbedQuery(ctx context.Context, query string, filter domain.VectorFilter, probeK int) (embedding []float32, candidates []domain.ScoredChunk, probeFailed bool, err error) {
+	if filter.MatchesNothing() {
+		return nil, nil, false, nil
+	}
 	embedding, err = r.embedder.Embed(ctx, query)
 	if err != nil {
-		return nil, 0, false, fmt.Errorf("retriever: embed query: %w", err)
+		return nil, nil, false, fmt.Errorf("retriever: embed query: %w", err)
 	}
-
-	// Get top similarity from global search to help with routing.
-	scored, qErr := r.vectorStore.QueryAllNamespaces(ctx, embedding, 1, "")
-	if qErr != nil {
-		log.Printf("retriever: routing probe failed; using GLOBAL retrieval: %v", qErr)
-		return embedding, 0, true, nil
+	if probeK <= 0 {
+		return embedding, nil, false, nil
 	}
-	if len(scored) > 0 {
-		topScore = scored[0].Score
+	candidates, err = r.queryFiltered(ctx, embedding, probeK, filter)
+	if err != nil {
+		log.Printf("retriever: routing probe failed; using GLOBAL retrieval: %v", err)
+		return embedding, nil, true, nil
 	}
-	return embedding, topScore, false, nil
+	return embedding, candidates, false, nil
 }
 
-func (r *Retriever) retrieveLocal(ctx context.Context, namespace string, embedding []float32, topK int, docTypeFilter string) ([]domain.ScoredChunk, error) {
-	if namespace == "" {
-		// If no namespace, fall back to global.
-		return r.retrieveGlobal(ctx, embedding, topK, docTypeFilter)
+func (r *Retriever) queryFiltered(ctx context.Context, embedding []float32, topK int, filter domain.VectorFilter) ([]domain.ScoredChunk, error) {
+	if filter.MatchesNothing() {
+		return []domain.ScoredChunk{}, nil
 	}
-	chunks, err := r.vectorStore.Query(ctx, namespace, embedding, topK, docTypeFilter)
+	if store, ok := r.vectorStore.(domain.FilteredVectorStore); ok {
+		return store.QueryFiltered(ctx, embedding, topK, filter)
+	}
+	chunks, err := r.vectorStore.QueryAllNamespaces(ctx, embedding, topK, filter.DocType)
 	if err != nil {
-		return nil, fmt.Errorf("retriever: local query namespace %q: %w", namespace, err)
+		return nil, err
 	}
-	return chunks, nil
-}
-
-func (r *Retriever) retrieveGlobal(ctx context.Context, embedding []float32, topK int, docTypeFilter string) ([]domain.ScoredChunk, error) {
-	chunks, err := r.vectorStore.QueryAllNamespaces(ctx, embedding, topK, docTypeFilter)
-	if err != nil {
-		return nil, fmt.Errorf("retriever: global query: %w", err)
+	allowed := make(map[string]struct{}, len(filter.DocumentIDs))
+	for _, id := range filter.DocumentIDs {
+		allowed[id] = struct{}{}
 	}
-	return chunks, nil
+	filtered := make([]domain.ScoredChunk, 0, len(chunks))
+	for _, sc := range chunks {
+		if filter.DocType != "" {
+			if docType, _ := sc.Chunk.Metadata["doc_type"].(string); docType != filter.DocType {
+				continue
+			}
+		}
+		if filter.DocumentIDs != nil {
+			if _, ok := allowed[string(sc.Chunk.DocumentID)]; !ok {
+				continue
+			}
+		}
+		filtered = append(filtered, sc)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool { return filtered[i].Score > filtered[j].Score })
+	if len(filtered) > topK {
+		filtered = filtered[:topK]
+	}
+	return filtered, nil
 }

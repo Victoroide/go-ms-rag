@@ -50,3 +50,8 @@ func (d *Driver) DeleteByDocID(ctx context.Context, docID string) error {
 func (d *Driver) Ping(ctx context.Context) error {
 	return d.client.Ping(ctx)
 }
+
+// QueryFiltered applies document scope before selecting vector results.
+func (d *Driver) QueryFiltered(ctx context.Context, embedding []float32, topK int, filter domain.VectorFilter) ([]domain.ScoredChunk, error) {
+	return d.client.QueryFiltered(ctx, embedding, topK, filter)
+}

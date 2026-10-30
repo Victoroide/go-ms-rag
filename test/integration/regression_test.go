@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -175,14 +174,14 @@ func TestQueryValidationAndAuthorization(t *testing.T) {
 	text := strings.Repeat("界", 650)
 	vector, err := emb.Embed(t.Context(), "policy")
 	require.NoError(t, err)
-	require.NoError(t, vs.Upsert(t.Context(), "", []domain.Chunk{{ID: "1", DocumentID: "allowed", Text: text, Embedding: vector}, {ID: "2", DocumentID: "private", Text: "secret", Embedding: vector}}))
+	require.NoError(t, vs.Upsert(t.Context(), "", []domain.Chunk{{ID: "1", DocumentID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Text: text, Embedding: vector}, {ID: "2", DocumentID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Text: "secret", Embedding: vector}}))
 	h := handler.QueryHandler(retriever.NewRetriever(vs, emb, 0.7, 10), amb, cfg, nil)
 	for _, tt := range []struct {
 		body        string
 		code, count int
 	}{
 		{`{"query":" "}`, 400, 0}, {`{"query":"policy","mode":"invalid"}`, 400, 0}, {`{"query":"policy","max_chunks":101}`, 400, 0},
-		{`{"query":"policy"} {}`, 400, 0}, {`{"query":"policy","allowed_document_ids":[]}`, 200, 0}, {`{"query":"policy","allowed_document_ids":["allowed"]}`, 200, 1},
+		{`{"query":"policy"} {}`, 400, 0}, {`{"query":"policy","allowed_document_ids":[]}`, 200, 0}, {`{"query":"policy","allowed_document_ids":["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]}`, 200, 1},
 	} {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/query", strings.NewReader(tt.body))
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
@@ -221,35 +220,6 @@ func (failedVectorDelete) DeleteAllVectorsInNamespace(context.Context, string) e
 	return errors.New("vector service unavailable")
 }
 func (failedVectorDelete) DeleteByDocID(context.Context, string) error { return nil }
-
-func TestNamedEntityCacheIsScopedToDatabase(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs a Docker daemon")
-	}
-	databaseURL := startPostgres(t)
-	first, err := pgstore.NewClient(t.Context(), databaseURL)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, first.Close(context.Background())) })
-	require.NoError(t, first.RunMigrations(t.Context()))
-	require.NoError(t, first.InsertDocument(t.Context(), domain.Document{ID: domain.DocumentID(uuid.NewString()), Content: "text", ContentPreview: "Cedar Archive stores records."}))
-	entities, err := pipeline.FetchNamedEntitiesFromDB(t.Context(), first.Pool)
-	require.NoError(t, err)
-	require.True(t, entities["cedar archive"])
-	_, err = first.Pool.Exec(t.Context(), `CREATE DATABASE other`)
-	require.NoError(t, err)
-	address, err := url.Parse(databaseURL)
-	require.NoError(t, err)
-	address.Path = "/other"
-	second, err := pgstore.NewClient(t.Context(), address.String())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, second.Close(context.Background())) })
-	require.NoError(t, second.RunMigrations(t.Context()))
-	require.NoError(t, second.InsertDocument(t.Context(), domain.Document{ID: domain.DocumentID(uuid.NewString()), Content: "text", ContentPreview: "Alpine Station stores records."}))
-	entities, err = pipeline.FetchNamedEntitiesFromDB(t.Context(), second.Pool)
-	require.NoError(t, err)
-	require.True(t, entities["alpine station"])
-	require.False(t, entities["cedar archive"])
-}
 
 type retryVectorDelete struct{ attempts int }
 

@@ -101,6 +101,10 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 			writeJSONError(w, http.StatusBadRequest, apiErr.Error, apiErr.Message)
 			return
 		}
+		if apiErr := validateQueryAllowlist(&req, cfg); apiErr != nil {
+			writeJSONError(w, http.StatusBadRequest, apiErr.Error, apiErr.Message)
+			return
+		}
 		ctx := r.Context()
 
 		qc := &pipeline.QueryContext{
@@ -112,12 +116,14 @@ func QueryHandler(ret *retriever.Retriever, amb *llm.Ambassador, cfg *config.Con
 		}
 
 		retrieval := pipeline.NewRetrievalStage(ret)
+		routing := pipeline.NewRoutingStage(ret)
 		if pool != nil {
 			retrieval = pipeline.NewRetrievalStageWithVisibility(ret, pgstore.Visibility{Pool: pool})
+			routing = pipeline.NewRoutingStageWithScope(ret, pgstore.Visibility{Pool: pool}, pgstore.Previews{Pool: pool})
 		}
 		stages := []pipeline.QueryStage{
-			pipeline.NewDecomposeStage(pool),
-			pipeline.NewRoutingStage(ret),
+			pipeline.NewDecomposeStage(),
+			routing,
 			retrieval,
 			pipeline.NewSynthesisStage(amb, cfg),
 		}
