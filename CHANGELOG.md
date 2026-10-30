@@ -7,6 +7,7 @@ Notable changes are grouped by release.
 ### Added
 
 - Optional Prometheus-format metrics on `METRICS_ADDR` for requests, pipeline stages, ingestion jobs and routing modes.
+- `make reconcile` lists, and with `ARGS=-apply` removes, vectors and legacy namespaces that no stored document references.
 - Requests carry an `X-Request-ID`, accepted from callers or generated, that appears in structured access and panic logs; `LOG_LEVEL` sets verbosity.
 - Multipart uploads accept UTF-8 and UTF-16 plain text (`.txt`, `.md`).
 - `SERVICE_TOKENS` accepts several comma-separated tokens for rotation without downtime; tokens are trimmed and compared by digest in constant time.

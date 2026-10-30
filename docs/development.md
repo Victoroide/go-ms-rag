@@ -107,6 +107,48 @@ Accepts one or more document UUIDs as command-line arguments and removes their r
 make cleanup IDS="<document-uuid-1> <document-uuid-2>"
 ```
 
+### Orphan Reconciliation (`scripts/reconcile`)
+
+Use the service environment configuration, including `DATABASE_URL`,
+`PINECONE_API_KEY` and `PINECONE_INDEX_NAME`, with hosted mode enabled. The database
+must already have its ingestion job migrations applied. Pause ingestion and other
+index writers during reconciliation so document checks and namespace counts stay
+valid through deletion. Always run a dry run first:
+
+```sh
+make reconcile
+make reconcile ARGS="-limit=10000 -page=100"
+```
+
+The command prints JSON with `orphan_vectors`, `orphan_namespaces` and up to 20
+sample identifiers prefixed with `vector:` or `namespace:`. Vector counts cover
+the default namespace. A vector is selected if `doc_id` is missing or invalid,
+the document row is missing, or its document has status `failed` with no
+`ingest_jobs` row. Retryable failures and processing documents are preserved.
+Only UUID-named legacy namespaces with no document row are selected; other
+namespace names are ignored.
+
+`-limit` defaults to 100000 and bounds selected default-namespace vectors plus
+the vector counts of whole selected namespaces. A namespace larger than the
+remaining budget is skipped, and an empty namespace consumes one budget entry.
+The listing page size defaults to 100 and accepts 1–1000. Listing stops at the
+end of the default namespace or when the selection budget is full; healthy
+vectors do not consume that budget. Pod-based indexes that do not support
+vector listing report the limitation on stderr and reconcile namespaces only.
+Other read errors stop the command before deletion.
+
+After reviewing the dry run, explicitly enable deletion with the same bounds:
+
+```sh
+make reconcile ARGS="-apply -limit=10000 -page=100"
+```
+
+Default-namespace IDs are deleted in batches of at most 1000. Legacy namespaces
+are deleted as a whole. PostgreSQL rows and source objects are preserved. A
+delete error stops further deletions and returns a nonzero exit status; earlier
+successful deletions remain applied. Rerun the dry run after the index has
+converged to verify the remaining selections.
+
 ### Language Evaluation (`scripts/langeval`)
 
 Measures whether generated answers match the language of the input question (e.g., English or Spanish) across a fixed evaluation query set, recording token usage and latency:
