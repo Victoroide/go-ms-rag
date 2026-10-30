@@ -176,6 +176,10 @@ Form fields:
 | `document_id` | string | no | Optional document UUID with the same identity and conflict rules as JSON requests, applied to extracted text |
 | `metadata` | JSON object string | no | Optional metadata with the same limits as JSON ingestion; duplicate top-level keys, trailing data and repeated metadata fields return 400. The stored object includes `source_file` set to the uploaded filename, overriding a caller value, and must still fit the size limit |
 
+DOCX extraction supports body text, text boxes, footnotes and endnotes in
+transitional and strict Open XML documents. Headers, footers and comments are
+not extracted. All extracted parts share the 1,000,000-byte text limit.
+
 DOC extraction supports the main document text in Word 97–2003 binary documents;
 headers, footers, footnotes and comments are not extracted. Word 6/95 documents
 and encrypted files return 422.

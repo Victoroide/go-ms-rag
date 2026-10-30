@@ -78,6 +78,7 @@ Notable changes are grouped by release.
 
 ### Fixed
 
+- DOCX extraction keeps text around text boxes, avoids duplicated alternate content, supports strict Open XML and includes footnotes and endnotes.
 - Bound chunks by estimated tokens and 30,000 bytes, splitting unspaced scripts, long tokens and long sentences; stop emitting chunks that repeat only the previous chunk's overlap.
 - Require `CHUNK_TOKEN_SIZE` to be at least 2, the minimum estimate for a non-dense character.
 - Bound each query by `QUERY_TIMEOUT` and its synthesis call by `SYNTHESIS_TIMEOUT`, limit concurrent queries, and retry upstream calls in a single layer.
