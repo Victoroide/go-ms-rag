@@ -60,6 +60,7 @@ func NewRouter(deps *RouterDeps) http.Handler {
 	mux.HandleFunc("POST /ingest", middleware.RequireServiceToken(tok, handler.IngestHandler(deps.Worker, deps.ChunkStore, objects, deps.Config.MaxUploadBytes, ingestOpts...)))
 	mux.HandleFunc("POST /query", middleware.RequireServiceToken(tok, handler.QueryHandler(deps.Retriever, deps.Ambassador, deps.Config, deps.PGPool)))
 	mux.HandleFunc("GET /documents", middleware.RequireServiceToken(tok, handler.ListDocumentsHandler(deps.ChunkStore)))
+	mux.HandleFunc("GET /documents/{doc_id}", middleware.RequireServiceToken(tok, handler.DocumentStatusHandler(deps.ChunkStore)))
 	mux.HandleFunc("GET /documents/{doc_id}/file", middleware.RequireServiceToken(tok, handler.FileHandler(deps.ChunkStore, deps.S3Client)))
 	mux.HandleFunc("DELETE /documents/{doc_id}", middleware.RequireServiceToken(tok, handler.DeleteHandler(deps.ChunkStore, deps.PineconeDriver, deps.S3Client)))
 	var h http.Handler = mux
