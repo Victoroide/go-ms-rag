@@ -6,6 +6,7 @@ Notable changes are grouped by release.
 
 ### Added
 
+- `SERVICE_TOKENS` accepts several comma-separated tokens for rotation without downtime; tokens are trimmed and compared by digest in constant time.
 - `GET /documents/{doc_id}` reports ingestion status, timestamps and the last error; `GET /documents` accepts `limit` and `after` and reports `status`, `chunk_count` and `created_at`.
 - Use the AWS default credential chain when static keys are not configured, with
   optional `AWS_SESSION_TOKEN`.

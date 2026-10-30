@@ -51,7 +51,8 @@ The table below lists every environment variable parsed by the service:
 | `EXTRACT_QUEUE_TIMEOUT` | duration | `5s` | 0s to 60s | Maximum wait for an upload slot; zero rejects immediately when full. |
 | `SYNTHESIS_MODEL` | string | `"fallback"` | `"primary"`, `"fallback"`, or `"hybrid"` | Model routing policy for query answer synthesis: `"fallback"` uses Llama 4 Maverick, `"primary"` uses Nova Micro, and `"hybrid"` dynamically selects between models based on query complexity. |
 | `GO_RAG_FAKE_MODE` | boolean | `false` | Boolean (`true`, `false`, `1`, `0`) | Runs the service in offline fake mode using an in-memory vector store and mock model generators without AWS or Pinecone credentials. Never enable in production deployments. |
-| `SERVICE_TOKEN` | string | `""` | Non-empty string in real mode | Shared secret token expected in the `X-Service-Token` header on protected endpoints. Required when `GO_RAG_FAKE_MODE=false`. |
+| `SERVICE_TOKEN` | string | `""` | No whitespace or control characters after trimming | Shared secret merged with `SERVICE_TOKENS`. At least one token is required when `GO_RAG_FAKE_MODE=false`. |
+| `SERVICE_TOKENS` | comma-separated strings | `""` | No whitespace or control characters within a token after trimming | Additional secrets accepted in `X-Service-Token` for rotation. Tokens are trimmed, empty entries are dropped and duplicates are removed across both variables. Startup warns with only the count of tokens shorter than 32 bytes; use secrets of at least 32 bytes. An empty combined list leaves routes open only in offline mode. |
 
 ---
 

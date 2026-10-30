@@ -26,7 +26,8 @@ accepted; they do not become vector search filters.
 
 ## Authentication
 
-When `SERVICE_TOKEN` is configured, all mutating and sensitive endpoints require the `X-Service-Token` HTTP header matching the configured token value:
+When `SERVICE_TOKEN` or `SERVICE_TOKENS` is configured, all mutating and sensitive endpoints require the `X-Service-Token` HTTP header matching any configured token:
+
 - `POST /ingest`
 - `POST /query`
 - `GET /documents`
@@ -34,7 +35,7 @@ When `SERVICE_TOKEN` is configured, all mutating and sensitive endpoints require
 - `GET /documents/{doc_id}/file`
 - `DELETE /documents/{doc_id}`
 
-Requests missing or presenting an incorrect token receive `401 Unauthorized`. Header comparisons are performed in constant time using `crypto/subtle.ConstantTimeCompare`. The `GET /livez`, `GET /readyz` and `GET /health` endpoints are public and do not require authentication.
+Requests missing or presenting an empty or incorrect token receive `401 Unauthorized`. Configuration trims tokens, drops empty entries and deduplicates both variables. Each request hashes the header with SHA-256 and compares it against every configured digest in constant time, without stopping at a match. An empty combined token list is allowed only in offline mode and leaves service routes open. The `GET /livez`, `GET /readyz` and `GET /health` endpoints are public and do not require authentication.
 
 ---
 
