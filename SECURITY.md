@@ -36,9 +36,10 @@ disclosure after a fix or mitigation is available.
   holding it. Avoid logging or sharing links and restrict storage permissions.
 - Uploaded file parsing: malformed documents, parser resource exhaustion and
   request size bypasses are in scope. Use a small synthetic file when reporting.
-- Retrieved text: documents may contain hostile instructions. Reports about
-  unauthorized document access, data disclosure or unsafe handling of retrieved
-  content are in scope.
+- Retrieved text: excerpts are delimited with per-request markers and stripped
+  of invisible characters before synthesis. Hostile text in a caller's own
+  documents can still influence answers. Reports about unauthorized document
+  access, data disclosure or unsafe handling of retrieved content are in scope.
 
 Offline mode is for local development only. It is not an authentication bypass
 that is safe to enable in a deployed service.
