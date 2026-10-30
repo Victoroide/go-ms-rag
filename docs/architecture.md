@@ -193,6 +193,7 @@ sequenceDiagram
     end
     Pinecone-->>Retrieval: Scored chunks
     Retrieval->>Retrieval: filterChunksByAllowedDocIDs (tenant allowlist enforcement)
+    Retrieval->>Retrieval: Remove chunks of unavailable documents using PostgreSQL
 
     Handler->>Synthesis: Run(QueryContext)
     alt No authorized evidence
@@ -225,6 +226,7 @@ sequenceDiagram
    - In `GLOBAL` mode, queries the default namespace. If fewer than 3 chunks are returned, an automatic fallback queries across namespaces up to a limit of 20 chunks.
    - Applies `filter_doc_type` metadata filter when specified.
    - Applies caller-supplied `allowed_document_ids` allowlists, filtering out chunks outside the allowlist prior to synthesis. A nil allowlist allows all documents; an empty allowlist denies all documents.
+   - Checks document visibility in PostgreSQL after the allowlist filter and before synthesis. Only completed documents contribute chunks, with a compatibility exception for older processing rows with a stored fingerprint whose final status write was lost. Failed, unfinished, deleted and missing documents are excluded even if their vectors remain searchable. Lookup failures stop the query; the top score is recomputed from visible chunks.
 4. **SynthesisStage**:
    - If no authorized evidence remains, returns `No relevant information was found to answer this question.` with no model call, zero synthesis token usage and `early_exit=true`.
    - Applies adaptive chunk trimming: drops chunks scoring below 55% of the top chunk's score, bounds chunk counts (5 chunks for simple queries, 8 for multi-need queries), and truncates chunk bodies at sentence boundaries near 1200 runes.

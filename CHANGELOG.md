@@ -69,6 +69,8 @@ Notable changes are grouped by release.
 
 - Remove the implicit `S3_BUCKET` default, verify bucket access and an optional
   expected owner at startup, and send the expected owner on storage writes.
+- Exclude chunks of deleted, failed and unfinished documents from query results
+  and answer generation.
 - Service token authentication for document and query routes, with startup checks
   that reject missing tokens outside offline mode.
 - Document allowlists applied before answer generation for restricted queries.

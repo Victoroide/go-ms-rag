@@ -183,7 +183,7 @@ Response fields (200 OK):
 |---|---|---|
 | `answer` | string | Grounded answer in the question's language when evidence exists; fixed English no-information answer otherwise |
 | `mode` | string | Retrieval mode executed: `"LOCAL"` or `"GLOBAL"` |
-| `chunks_used` | int | Count of chunks retrieved from the vector store |
+| `chunks_used` | int | Count of chunks from completed documents remaining after visibility and allowlist filtering |
 | `context_chunks` | int | Count of chunks retained after score thresholding and passed into the LLM context (optional) |
 | `context_tokens` | int | Estimated token count of the prompt context (optional) |
 | `early_exit` | bool | Indicates whether query execution completed early (optional) |
@@ -192,6 +192,8 @@ Response fields (200 OK):
 | `scored_chunks` | array | Retrieved chunks ordered by similarity score |
 
 If retrieval or the document allowlist leaves no evidence, the answer is `No relevant information was found to answer this question.` No synthesis model is called, `token_usage` fields are zero, and `early_exit` is true. A transient similarity-probe failure selects GLOBAL retrieval in automatic mode instead of failing the query; embedding or subsequent retrieval failures still return 500.
+
+Document visibility is checked against PostgreSQL before answer generation. Older processing rows with a stored fingerprint are treated as completed for compatibility. Failed, unfinished and missing documents contribute no chunks; a visibility lookup failure returns 500. The same empty-evidence response applies when visibility filtering removes all chunks.
 
 Scored chunk fields:
 
@@ -325,6 +327,8 @@ Deletion ordering:
 4. Deletes the document record from PostgreSQL (cascading foreign keys remove rows in `chunks` and `document_fingerprints`).
 
 If an error occurs while deleting vectors or object storage, PostgreSQL metadata is preserved so the operation can be retried, and the request returns `500 Internal Server Error`.
+
+After deletion returns successfully, subsequent queries exclude the document from answers and scored chunks immediately, even while vector deletion is still propagating through the index.
 
 Response fields (200 OK):
 
