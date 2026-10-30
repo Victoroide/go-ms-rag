@@ -9,6 +9,21 @@ All API responses use `Content-Type: application/json`. Error responses follow a
 }
 ```
 
+JSON request bodies must be objects. Unknown request fields and duplicate
+top-level keys return 400 with `unknown field "<name>"` or
+`duplicate field "<name>"`. Trailing data after the object also returns 400.
+
+Document labels (`doc_type` and `filter_doc_type`) are trimmed and normalized to
+Unicode NFC, limited to 128 UTF-8 bytes, and must contain no control or Unicode
+format characters. An empty ingestion label uses the default `document`; an
+empty query filter imposes no document type restriction.
+
+Metadata is stored only in PostgreSQL. Its serialized JSON representation is
+limited to 65,536 bytes (64 KiB), including JSON escaping, with at most eight
+nested object or array levels counting the root object as level one. Keys and
+string values must contain no NUL characters. Arbitrary metadata keys are
+accepted; they do not become vector search filters.
+
 ## Authentication
 
 When `SERVICE_TOKEN` is configured, all mutating and sensitive endpoints require the `X-Service-Token` HTTP header matching the configured token value:
@@ -76,7 +91,7 @@ Request fields:
 | `content` | string | yes | Document text content (maximum 1,000,000 bytes after JSON decoding) |
 | `doc_type` | string | no | Document category label. Defaults to `"document"` if omitted |
 | `document_id` | string | no | Optional document UUID, retained in canonical form. Omitted or empty values generate a fresh UUID; malformed non-empty values return 400 |
-| `metadata` | object | no | Optional arbitrary key-value metadata object stored in PostgreSQL and vector metadata |
+| `metadata` | object | no | Optional key-value metadata stored only in PostgreSQL, subject to the size, nesting and NUL limits above |
 
 Response (New Document):
 - **Status**: `202 Accepted`
@@ -113,7 +128,7 @@ Error Status Codes:
 
 | Status | Error Category | Condition |
 |---|---|---|
-| `400 Bad Request` | `validation` | Content field missing, empty, blank whitespace, or exceeding 1,000,000 decoded bytes; trailing characters after JSON body; malformed JSON; non-empty `document_id` is not a UUID (`document_id must be a UUID`) |
+| `400 Bad Request` | `validation` | Content field missing, empty, blank whitespace, or exceeding 1,000,000 decoded bytes; malformed JSON, unknown fields, duplicate top-level keys or trailing data; invalid label or metadata; non-empty `document_id` is not a UUID (`document_id must be a UUID`) |
 | `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
 | `409 Conflict` | `conflict` | Supplied `document_id` already exists with different content |
 | `413 Payload Too Large` | `validation` | JSON request payload exceeds 8,097,152 bytes |
@@ -149,6 +164,7 @@ Form fields:
 | `file` | file binary | yes | Binary file to extract and ingest. Accepted formats: PDF, DOCX, DOC |
 | `doc_type` | string | no | Document category label. Defaults to `"document"` if omitted |
 | `document_id` | string | no | Optional document UUID with the same identity and conflict rules as JSON requests, applied to extracted text |
+| `metadata` | JSON object string | no | Optional metadata with the same limits as JSON ingestion; duplicate top-level keys, trailing data and repeated metadata fields return 400. The stored object includes `source_file` set to the uploaded filename, overriding a caller value, and must still fit the size limit |
 
 New uploads return 202 after durable acceptance with the retained or generated identifier. Completed duplicates return 200 `already_ingested`; in-flight duplicates return 202 with the same identifier; failed duplicates return 202 and are requeued. Without `document_id`, uploads use content deduplication. A configured source store must accept the original upload before document acceptance. New source objects are removed when acceptance does not retain them.
 
@@ -156,7 +172,7 @@ Error Status Codes:
 
 | Status | Error Category | Condition |
 |---|---|---|
-| `400 Bad Request` | `validation` | Form `file` part missing or read error; non-empty `document_id` is not a UUID |
+| `400 Bad Request` | `validation` | Form `file` part missing or read error; invalid label or metadata; non-empty `document_id` is not a UUID |
 | `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
 | `409 Conflict` | `conflict` | Supplied `document_id` already exists with different extracted text |
 | `413 Payload Too Large` | `validation` | Upload exceeds `MAX_UPLOAD_BYTES` |
@@ -175,7 +191,8 @@ Example:
 curl -X POST localhost:8081/ingest \
   -H "X-Service-Token: dev-token" \
   -F "file=@technical_paper.pdf" \
-  -F "doc_type=research"
+  -F "doc_type=research" \
+  -F 'metadata={"author":"research-team"}'
 ```
 
 ---
@@ -196,8 +213,8 @@ Request fields:
 |---|---|---|---|
 | `query` | string | yes | Natural-language query string (1 to 10,000 decoded bytes) |
 | `mode` | string | no | Retrieval mode: `"auto"` (default), `"local"`, or `"global"`. Case-insensitive |
-| `filter_doc_type` | string | no | Restricts vector retrieval to chunks matching the given `doc_type` |
-| `max_chunks` | int | no | Maximum chunks to retrieve (0 to 100). Defaults to `MAX_CHUNKS_PER_QUERY` (10) |
+| `filter_doc_type` | string | no | Restricts vector retrieval to chunks matching the given `doc_type`, using the label normalization and limits above |
+| `max_chunks` | int | no | Requested chunks to retrieve (0 to 100), capped by `MAX_CHUNKS_PER_QUERY`. Omitted or zero uses that configured maximum (default 10) |
 | `allowed_document_ids` | array of strings | no | Tenant/role allowlist of UUIDs, at most `MAX_ALLOWED_DOCUMENT_IDS` entries (default 25000). IDs are canonicalized and deduplicated. Omitted or `null` means unrestricted unless `REQUIRE_DOCUMENT_ALLOWLIST=true`, which makes a non-null field mandatory. An empty list (`[]`) returns the no-information answer without embedding or search. The allowlist is applied inside vector search and routing |
 
 Response fields (200 OK):
@@ -236,7 +253,7 @@ Error Status Codes:
 
 | Status | Error Category | Condition |
 |---|---|---|
-| `400 Bad Request` | `validation` | Query missing, empty, or whitespace; query exceeding 10,000 decoded bytes; mode not auto, local, or global; max_chunks outside 0-100; trailing JSON data; malformed JSON |
+| `400 Bad Request` | `validation` | Query missing, empty, or whitespace; query exceeding 10,000 decoded bytes; mode not auto, local, or global; max_chunks outside 0-100; invalid document type filter; malformed JSON, unknown fields, duplicate top-level keys or trailing data |
 | `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
 | `413 Payload Too Large` | `validation` | Request body exceeds the 1 MiB limit |
 | `415 Unsupported Media Type` | `validation` | Content-Type is not `application/json` |

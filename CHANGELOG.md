@@ -9,6 +9,7 @@ Notable changes are grouped by release.
 - `GET /documents/{doc_id}` reports ingestion status, timestamps and the last error; `GET /documents` accepts `limit` and `after` and reports `status`, `chunk_count` and `created_at`.
 - Use the AWS default credential chain when static keys are not configured, with
   optional `AWS_SESSION_TOKEN`.
+- Multipart uploads accept a `metadata` form field.
 - JSON and multipart document ingestion with content deduplication, asynchronous
   processing and caller-supplied document identifiers.
 - Text extraction, normalization, semantic chunking and chunk quality metadata.
@@ -24,6 +25,7 @@ Notable changes are grouped by release.
 - AWS calls share one retry policy (`AWS_MAX_ATTEMPTS`, no client-side retry
   quota, `ModelTimeoutException` retried); embedding calls time out after
   `EMBED_TIMEOUT`.
+- JSON requests with unknown fields or duplicate top-level keys return 400; labels are limited to 128 bytes without control or format characters; metadata is limited to 64 KiB and depth 8; `max_chunks` is capped by `MAX_CHUNKS_PER_QUERY`.
 - `WORKER_QUEUE_SIZE` limits pending jobs (default 1000); identical in-flight submissions return the existing identifier with 202; resubmitting the content of a failed document retries it; source file upload failures return 503.
 
 - Content deduplication applies only to requests without `document_id`;
