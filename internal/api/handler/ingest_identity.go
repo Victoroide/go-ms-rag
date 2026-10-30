@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/Victoroide/quarry-rag/internal/chunker"
@@ -67,24 +66,4 @@ func acceptIngest(rw http.ResponseWriter, r *http.Request, wk *worker.Worker, cs
 		slog.ErrorContext(r.Context(), "encode ingestion response", "error", err)
 	}
 	return result.Outcome, nil
-}
-
-func metadataHasNUL(value any) bool {
-	switch v := value.(type) {
-	case string:
-		return strings.ContainsRune(v, 0)
-	case map[string]any:
-		for key, item := range v {
-			if strings.ContainsRune(key, 0) || metadataHasNUL(item) {
-				return true
-			}
-		}
-	case []any:
-		for _, item := range v {
-			if metadataHasNUL(item) {
-				return true
-			}
-		}
-	}
-	return false
 }
