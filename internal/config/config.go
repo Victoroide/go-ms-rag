@@ -74,9 +74,11 @@ type Config struct {
 	IngestJobTimeout   time.Duration
 	IngestPollInterval time.Duration
 
-	AWSSessionToken string
-	AWSMaxAttempts  int
-	EmbedTimeout    time.Duration
+	AWSSessionToken    string
+	AWSMaxAttempts     int
+	EmbedTimeout       time.Duration
+	ShutdownDrainDelay time.Duration
+	HealthCacheTTL     time.Duration
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -157,6 +159,8 @@ func Load() (*Config, error) {
 		{"INGEST_JOB_TIMEOUT", &cfg.IngestJobTimeout, 15 * time.Minute},
 		{"INGEST_POLL_INTERVAL", &cfg.IngestPollInterval, time.Second},
 		{"EMBED_TIMEOUT", &cfg.EmbedTimeout, 15 * time.Second},
+		{"SHUTDOWN_DRAIN_DELAY", &cfg.ShutdownDrainDelay, 5 * time.Second},
+		{"HEALTH_CACHE_TTL", &cfg.HealthCacheTTL, 10 * time.Second},
 	} {
 		value, parseErr := envDurationOrDefault(setting.key, setting.fallback)
 		if parseErr != nil {
@@ -286,6 +290,12 @@ func (c *Config) validate() error {
 	}
 	if c.IngestPollInterval < 100*time.Millisecond || c.IngestPollInterval > time.Minute {
 		return fmt.Errorf("config: INGEST_POLL_INTERVAL must be between 100ms and 1m")
+	}
+	if c.ShutdownDrainDelay < 0 || c.ShutdownDrainDelay > time.Minute {
+		return fmt.Errorf("config: SHUTDOWN_DRAIN_DELAY must be between 0s and 60s")
+	}
+	if c.HealthCacheTTL < time.Second || c.HealthCacheTTL > 5*time.Minute {
+		return fmt.Errorf("config: HEALTH_CACHE_TTL must be between 1s and 5m")
 	}
 
 	return nil

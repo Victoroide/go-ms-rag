@@ -29,13 +29,14 @@ type RouterDeps struct {
 	S3Client       *s3store.Client
 	PineconeDriver domain.VectorDeleter
 	PGPool         *pgxpool.Pool
+	Probes         *handler.Probes
 }
 
 // NewRouter wires all HTTP routes, handlers, and middleware.
 func NewRouter(deps *RouterDeps) http.Handler {
 	mux := http.NewServeMux()
 	// Service-to-service auth: when SERVICE_TOKEN is set, every route except the
-	// health probe requires a matching X-Service-Token header. The presigned
+	// public probes requires a matching X-Service-Token header. The presigned
 	// file GET is included because it mints S3 download URLs for any document id
 	// and must never be reachable without the trusted caller in front of it.
 	tok := deps.Config.ServiceToken
@@ -52,7 +53,13 @@ func NewRouter(deps *RouterDeps) http.Handler {
 			ingestOpts = append(ingestOpts, handler.WithExtractor(sb.Extract))
 		}
 	}
-	mux.HandleFunc("GET /health", handler.HealthHandler(deps.VectorStore, deps.ChunkStore, deps.S3Client))
+	probes := deps.Probes
+	if probes == nil {
+		probes = handler.NewProbes(deps.VectorStore, deps.ChunkStore, deps.S3Client, deps.Config.HealthCacheTTL)
+	}
+	mux.HandleFunc("GET /health", handler.HealthHandler(probes))
+	mux.HandleFunc("GET /livez", handler.LivenessHandler())
+	mux.HandleFunc("GET /readyz", handler.ReadinessHandler(probes))
 	var objects handler.ObjectStore
 	if deps.S3Client != nil {
 		objects = deps.S3Client
