@@ -109,14 +109,22 @@ func run() error {
 		amb = llm.NewAmbassador(cfg)
 		amb.SetClient(llmClient)
 
-		// Initialize S3 client (non-fatal if it fails). Skipped in FAKE MODE.
-		if cfg.S3Bucket != "" {
-			s3c, s3Err := s3store.New(startupCtx, cfg)
-			if s3Err != nil {
-				log.Printf("WARNING: s3 init failed (file uploads disabled): %v", s3Err)
-			} else {
-				s3Client = s3c
+		if cfg.S3Bucket == "" {
+			logger.Warn("S3_BUCKET is not set; original files are not stored")
+		} else {
+			s3Ctx, s3Cancel := context.WithTimeout(ctx, 10*time.Second)
+			s3c, s3Err := s3store.New(s3Ctx, cfg)
+			if s3Err == nil {
+				s3Err = s3c.Verify(s3Ctx)
 			}
+			s3Cancel()
+			if errors.Is(s3Err, s3store.ErrBucketUnavailable) {
+				return fmt.Errorf("startup: s3: %w", s3Err)
+			}
+			if s3Err != nil {
+				logger.Warn("S3 initialization or bucket verification failed", "error", s3Err)
+			}
+			s3Client = s3c
 		}
 	}
 

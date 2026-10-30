@@ -52,26 +52,29 @@ type Config struct {
 
 	// ServiceToken protects every route except the public health probe.
 	ServiceToken string
+
+	S3ExpectedBucketOwner string
 }
 
 // Load reads configuration from environment variables, applies defaults,
 // and validates required fields.
 func Load() (*Config, error) {
 	cfg := &Config{
-		ServerPort:           envOrDefault("SERVER_PORT", "8081"),
-		AWSRegion:            os.Getenv("AWS_REGION"),
-		AWSAccessKeyID:       os.Getenv("AWS_ACCESS_KEY_ID"),
-		AWSSecretKey:         os.Getenv("AWS_SECRET_ACCESS_KEY"),
-		BedrockEmbedModel:    envOrDefault("BEDROCK_EMBED_MODEL", "amazon.titan-embed-text-v2:0"),
-		BedrockPrimaryModel:  envOrDefault("BEDROCK_PRIMARY_MODEL", "amazon.nova-micro-v1:0"),
-		BedrockFallbackModel: envOrDefault("BEDROCK_FALLBACK_MODEL", "us.meta.llama4-maverick-17b-instruct-v1:0"),
-		PineconeAPIKey:       os.Getenv("PINECONE_API_KEY"),
-		PineconeIndexName:    envOrDefault("PINECONE_INDEX_NAME", "go-ms-rag"),
-		PineconeEnvironment:  os.Getenv("PINECONE_ENVIRONMENT"),
-		DatabaseURL:          os.Getenv("DATABASE_URL"),
-		S3Bucket:             envOrDefault("S3_BUCKET", "ms-go-rag"),
-		SynthesisModel:       envOrDefault("SYNTHESIS_MODEL", "fallback"),
-		ServiceToken:         os.Getenv("SERVICE_TOKEN"),
+		ServerPort:            envOrDefault("SERVER_PORT", "8081"),
+		AWSRegion:             os.Getenv("AWS_REGION"),
+		AWSAccessKeyID:        os.Getenv("AWS_ACCESS_KEY_ID"),
+		AWSSecretKey:          os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		BedrockEmbedModel:     envOrDefault("BEDROCK_EMBED_MODEL", "amazon.titan-embed-text-v2:0"),
+		BedrockPrimaryModel:   envOrDefault("BEDROCK_PRIMARY_MODEL", "amazon.nova-micro-v1:0"),
+		BedrockFallbackModel:  envOrDefault("BEDROCK_FALLBACK_MODEL", "us.meta.llama4-maverick-17b-instruct-v1:0"),
+		PineconeAPIKey:        os.Getenv("PINECONE_API_KEY"),
+		PineconeIndexName:     envOrDefault("PINECONE_INDEX_NAME", "go-ms-rag"),
+		PineconeEnvironment:   os.Getenv("PINECONE_ENVIRONMENT"),
+		DatabaseURL:           os.Getenv("DATABASE_URL"),
+		S3Bucket:              os.Getenv("S3_BUCKET"),
+		SynthesisModel:        envOrDefault("SYNTHESIS_MODEL", "fallback"),
+		ServiceToken:          os.Getenv("SERVICE_TOKEN"),
+		S3ExpectedBucketOwner: os.Getenv("S3_EXPECTED_BUCKET_OWNER"),
 	}
 	for _, setting := range []struct {
 		key      string
@@ -171,6 +174,11 @@ func (c *Config) validate() error {
 	// auth, which is acceptable only for offline fake mode (dev/CI/QA).
 	if !c.FakeMode && strings.TrimSpace(c.ServiceToken) == "" {
 		return fmt.Errorf("config: SERVICE_TOKEN is required when GO_RAG_FAKE_MODE is off")
+	}
+	if c.S3ExpectedBucketOwner != "" {
+		if len(c.S3ExpectedBucketOwner) != 12 || strings.IndexFunc(c.S3ExpectedBucketOwner, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+			return fmt.Errorf("config: S3_EXPECTED_BUCKET_OWNER must contain exactly 12 digits")
+		}
 	}
 	return nil
 }

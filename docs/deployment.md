@@ -62,13 +62,14 @@ In production deployments (`GO_RAG_FAKE_MODE=false`), the microservice connects 
 
 ### 4. AWS S3 (Raw Object Storage)
 
-- **Configuration**: `S3_BUCKET` (using the same AWS credentials configured for Bedrock).
-- **Purpose**: Stores original binary uploads (PDF, DOCX, DOC) and generates presigned GET download links valid for 15 minutes.
+- **Configuration**: Set `S3_BUCKET` explicitly to a bucket you control, using the same AWS credentials configured for Bedrock. Set optional `S3_EXPECTED_BUCKET_OWNER` to the owner's 12-digit AWS account ID. An empty bucket disables original file storage and logs a startup warning.
+- **Startup Verification**: Client initialization and `HeadBucket` share a 10-second deadline. Access denied (403), a missing bucket (404), or an expected-owner mismatch prevents startup. Transient errors log a warning and allow startup to continue; an initialized client remains available for later requests.
+- **Purpose**: Stores original binary uploads (PDF, DOCX, DOC) and generates presigned GET download links valid for 15 minutes. Downloads use attachment disposition with the stored filename and an extension-derived content type. Downloaders need no expected-owner header.
 - **IAM Permissions Required**:
   - `s3:PutObject` on `arn:aws:s3:::{bucket}/documents/*`
   - `s3:GetObject` on `arn:aws:s3:::{bucket}/documents/*`
   - `s3:DeleteObject` on `arn:aws:s3:::{bucket}/documents/*`
-  - `s3:HeadBucket` on `arn:aws:s3:::{bucket}`
+  - `s3:ListBucket` on `arn:aws:s3:::{bucket}`, required by the startup and health `HeadBucket` checks.
 
 ---
 

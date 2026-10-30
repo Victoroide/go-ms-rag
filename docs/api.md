@@ -273,7 +273,7 @@ curl localhost:8081/documents \
 
 ### GET /documents/{doc_id}/file
 
-Generates a presigned S3 URL for downloading the original binary file associated with an ingested document.
+Generates a presigned S3 URL for downloading the original binary file associated with an ingested document. Downloads are served as attachments using the stored filename and a content type derived from its extension.
 
 - **Method**: `GET`
 - **Path**: `/documents/{doc_id}/file`
@@ -310,6 +310,8 @@ curl localhost:8081/documents/8a3e792c-5df6-4b6e-a612-4f7db4959db2/file \
 
 Deletes a document and all related artifacts across Pinecone, S3, and PostgreSQL.
 
+Deletion continues after the caller disconnects, with a separate 60-second deadline. When a stored file exists but file storage is not configured, deletion returns `503 Service Unavailable` before removing any vectors or metadata, with `{"error":"storage","message":"stored file cannot be deleted because file storage is not configured"}`.
+
 - **Method**: `DELETE`
 - **Path**: `/documents/{doc_id}`
 - **Auth**: Required (`X-Service-Token`)
@@ -339,6 +341,7 @@ Error Status Codes:
 | `401 Unauthorized` | `unauthorized` | Missing or invalid `X-Service-Token` header |
 | `404 Not Found` | `not_found` | Document does not exist in PostgreSQL |
 | `500 Internal Server Error` | `internal` | Database query failure or external deletion error in Pinecone or S3 |
+| `503 Service Unavailable` | `storage` | A stored file exists but file storage is not configured; no data is deleted |
 
 Example:
 

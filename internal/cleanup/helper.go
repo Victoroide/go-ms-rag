@@ -23,6 +23,9 @@ type ObjectDeleter interface {
 
 // Remove deletes external data before metadata so failed operations remain retryable.
 func Remove(ctx context.Context, cs domain.ChunkStore, vectors domain.VectorDeleter, objects ObjectDeleter, doc *domain.Document) error {
+	if doc.S3Key != nil && objects == nil {
+		return ErrFileStorageUnavailable
+	}
 	if vectors != nil {
 		if err := vectors.DeleteAllVectorsInNamespace(ctx, string(doc.ID)); err != nil && status.Code(err) != codes.NotFound {
 			return fmt.Errorf("delete document namespace: %w", err)
@@ -44,6 +47,9 @@ func Remove(ctx context.Context, cs domain.ChunkStore, vectors domain.VectorDele
 
 // ErrDocumentNotFound indicates that metadata is not yet present or was removed.
 var ErrDocumentNotFound = errors.New("document not found")
+
+// ErrFileStorageUnavailable indicates a stored file cannot be removed without object storage.
+var ErrFileStorageUnavailable = errors.New("file storage is not configured")
 
 // Cleaner reuses store connections for a sequence of document deletions.
 type Cleaner struct {

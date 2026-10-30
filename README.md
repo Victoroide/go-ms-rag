@@ -92,6 +92,8 @@ To run the containerized application using Docker Compose:
 cp .env.example .env
 ```
 
+Set `S3_BUCKET=your-owned-bucket` in `.env` for original file storage, and optionally set `S3_EXPECTED_BUCKET_OWNER` to the owner's 12-digit AWS account ID. Leaving `S3_BUCKET` empty disables original file storage.
+
 2. Start the container in detached mode:
 
 ```sh
