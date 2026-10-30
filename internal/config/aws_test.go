@@ -17,6 +17,7 @@ func awsConfigEnvironment(t *testing.T) {
 	t.Setenv("AWS_MAX_ATTEMPTS", "")
 	t.Setenv("EMBED_TIMEOUT", "")
 	t.Setenv("PINECONE_API_KEY", "test-key")
+	t.Setenv("PINECONE_INDEX_NAME", "quarry-rag")
 	t.Setenv("SERVICE_TOKEN", "test-token")
 }
 

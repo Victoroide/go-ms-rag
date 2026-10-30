@@ -8,7 +8,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - AWS_REGION=us-east-1
-      - PINECONE_INDEX_NAME=go-ms-rag
+      - PINECONE_INDEX_NAME=quarry-rag
       - EMBEDDING_DIMENSIONS=1024
       - LOCAL_RETRIEVAL_THRESHOLD=0.70
       - MAX_CHUNKS_PER_QUERY=10

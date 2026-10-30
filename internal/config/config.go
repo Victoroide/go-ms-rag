@@ -24,9 +24,8 @@ type Config struct {
 	BedrockPrimaryModel  string
 	BedrockFallbackModel string
 
-	PineconeAPIKey      string
-	PineconeIndexName   string
-	PineconeEnvironment string
+	PineconeAPIKey    string
+	PineconeIndexName string
 
 	DatabaseURL string
 
@@ -93,6 +92,7 @@ type Config struct {
 	HTTPIdleTimeout   time.Duration
 	LogLevel          slog.Level
 	MetricsAddr       string
+	Warnings          []string
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -108,8 +108,7 @@ func Load() (*Config, error) {
 		BedrockPrimaryModel:   envOrDefault("BEDROCK_PRIMARY_MODEL", "amazon.nova-micro-v1:0"),
 		BedrockFallbackModel:  envOrDefault("BEDROCK_FALLBACK_MODEL", "us.meta.llama4-maverick-17b-instruct-v1:0"),
 		PineconeAPIKey:        os.Getenv("PINECONE_API_KEY"),
-		PineconeIndexName:     envOrDefault("PINECONE_INDEX_NAME", "go-ms-rag"),
-		PineconeEnvironment:   os.Getenv("PINECONE_ENVIRONMENT"),
+		PineconeIndexName:     os.Getenv("PINECONE_INDEX_NAME"),
 		DatabaseURL:           os.Getenv("DATABASE_URL"),
 		S3Bucket:              os.Getenv("S3_BUCKET"),
 		SynthesisModel:        envOrDefault("SYNTHESIS_MODEL", "fallback"),
@@ -117,6 +116,9 @@ func Load() (*Config, error) {
 		ServiceTokens:         strings.Split(os.Getenv("SERVICE_TOKENS"), ","),
 		S3ExpectedBucketOwner: os.Getenv("S3_EXPECTED_BUCKET_OWNER"),
 		AWSSessionToken:       os.Getenv("AWS_SESSION_TOKEN"),
+	}
+	if os.Getenv("PINECONE_ENVIRONMENT") != "" {
+		cfg.Warnings = append(cfg.Warnings, "PINECONE_ENVIRONMENT is ignored")
 	}
 	for _, setting := range []struct {
 		key      string
@@ -218,6 +220,7 @@ func (c *Config) validate() error {
 		required = append(required,
 			requirement{"AWS_REGION", c.AWSRegion},
 			requirement{"PINECONE_API_KEY", c.PineconeAPIKey},
+			requirement{"PINECONE_INDEX_NAME", c.PineconeIndexName},
 		)
 	}
 	var missing []string

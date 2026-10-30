@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,13 +12,14 @@ import (
 func baseValidConfig() *Config {
 	return &Config{
 		ServerPort: "8081", ChunkTokenSize: 512, ChunkOverlap: 64, LocalRetrievalThreshold: 0.7, MaxChunksPerQuery: 10, MaxUploadBytes: 20 << 20, EmbeddingDimensions: 1024, SynthesisModel: "fallback",
-		DatabaseURL:     "postgres://localhost:5432/db?sslmode=disable",
-		AWSRegion:       "us-east-1",
-		AWSAccessKeyID:  "AKIA_TEST",
-		AWSSecretKey:    "secret_test",
-		PineconeAPIKey:  "pc_test",
-		WorkerQueueSize: 1000,
-		IngestWorkers:   2, IngestMaxAttempts: 5, IngestLease: 2 * time.Minute, IngestJobTimeout: 15 * time.Minute, IngestPollInterval: time.Second,
+		DatabaseURL:       "postgres://localhost:5432/db?sslmode=disable",
+		AWSRegion:         "us-east-1",
+		AWSAccessKeyID:    "AKIA_TEST",
+		AWSSecretKey:      "secret_test",
+		PineconeAPIKey:    "pc_test",
+		PineconeIndexName: "quarry-rag",
+		WorkerQueueSize:   1000,
+		IngestWorkers:     2, IngestMaxAttempts: 5, IngestLease: 2 * time.Minute, IngestJobTimeout: 15 * time.Minute, IngestPollInterval: time.Second,
 		EmbedConcurrency:        10,
 		ServiceToken:            "a-strong-service-token",
 		FakeMode:                false,
@@ -30,6 +32,60 @@ func baseValidConfig() *Config {
 		ShutdownDrainDelay: 5 * time.Second, HealthCacheTTL: 10 * time.Second,
 		QueryTimeout: time.Minute, SynthesisTimeout: 45 * time.Second, QueryConcurrency: 32, QueryQueueTimeout: 2 * time.Second,
 		HTTPReadTimeout: time.Minute, HTTPWriteTimeout: 75 * time.Second, HTTPIdleTimeout: time.Minute,
+	}
+}
+
+func TestIndexNameRequiredWithExternalServices(t *testing.T) {
+	awsConfigEnvironment(t)
+	t.Setenv("PINECONE_INDEX_NAME", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "PINECONE_INDEX_NAME") {
+		t.Fatalf("expected missing PINECONE_INDEX_NAME error, got %v", err)
+	}
+}
+
+func TestIndexNameOptionalInOfflineMode(t *testing.T) {
+	t.Setenv("GO_RAG_FAKE_MODE", "true")
+	t.Setenv("DATABASE_URL", "host=localhost dbname=rag")
+	t.Setenv("PINECONE_INDEX_NAME", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PineconeIndexName != "" {
+		t.Fatalf("expected no implicit index name, got %q", cfg.PineconeIndexName)
+	}
+}
+
+func TestPineconeEnvironmentIsIgnoredWithWarning(t *testing.T) {
+	for _, fakeMode := range []string{"false", "true"} {
+		t.Run(fakeMode, func(t *testing.T) {
+			awsConfigEnvironment(t)
+			t.Setenv("GO_RAG_FAKE_MODE", fakeMode)
+			t.Setenv("PINECONE_ENVIRONMENT", "unused-environment")
+			cfg, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(cfg.Warnings, "PINECONE_ENVIRONMENT is ignored") {
+				t.Fatalf("expected ignored environment warning, got %v", cfg.Warnings)
+			}
+			if cfg.PineconeIndexName != "quarry-rag" {
+				t.Fatalf("ignored environment changed index name: %q", cfg.PineconeIndexName)
+			}
+		})
+	}
+}
+
+func TestExplicitIndexNameHasNoWarning(t *testing.T) {
+	awsConfigEnvironment(t)
+	t.Setenv("PINECONE_INDEX_NAME", "quarry-rag")
+	t.Setenv("PINECONE_ENVIRONMENT", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PineconeIndexName != "quarry-rag" || len(cfg.Warnings) != 0 {
+		t.Fatalf("unexpected index configuration: index=%q warnings=%v", cfg.PineconeIndexName, cfg.Warnings)
 	}
 }
 
