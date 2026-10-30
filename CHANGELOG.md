@@ -75,6 +75,8 @@ Notable changes are grouped by release.
 
 ### Fixed
 
+- Bound chunks by estimated tokens and 30,000 bytes, splitting unspaced scripts, long tokens and long sentences; stop emitting chunks that repeat only the previous chunk's overlap.
+- Require `CHUNK_TOKEN_SIZE` to be at least 2, the minimum estimate for a non-dense character.
 - `GET /documents` returns an empty array instead of `null` and streams large listings.
 - Preserve superscripts, fractions, circled numbers and text between comparison operators during ingestion; keep carriage-return paragraph breaks; strip HTML only from documents that contain markup.
 - Reject embeddings whose length differs from `EMBEDDING_DIMENSIONS`.
