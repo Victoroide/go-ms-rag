@@ -84,16 +84,12 @@ In production deployments (`GO_RAG_FAKE_MODE=false`), the microservice connects 
 
 ## Health Probes and Readiness
 
-The service exposes an unauthenticated health probe at `GET /health`.
+The service exposes three unauthenticated probe endpoints:
 
-```sh
-curl localhost:8081/health
-```
-
-- Probes run sequentially against Pinecone, PostgreSQL, and configured S3 storage with a 5-second timeout.
-- Returns HTTP 200 OK with `status: "ok"` when all dependencies respond.
-- Returns HTTP 503 Service Unavailable with `status: "degraded"` if any dependency fails to respond.
-- Use `GET /health` for container orchestrator readiness and liveness checks.
+- Use `GET /livez` for startup and liveness checks. It always returns HTTP 200 with `status: "ok"` while serving requests and makes no dependency calls.
+- Use `GET /readyz` for readiness checks. It returns HTTP 200 with `status: "ready"` when the cached PostgreSQL check succeeds, HTTP 503 with `status: "unavailable"` when that check fails, and HTTP 503 with `status: "draining"` during shutdown.
+- Use `GET /health` for diagnostics. It returns HTTP 200 with `status: "ok"` when all configured dependencies respond, or HTTP 503 with `status: "degraded"` otherwise. `postgres` reports database health; `neon` is a deprecated alias.
+- Diagnostics and readiness share a snapshot cached for `HEALTH_CACHE_TTL` (default 10 seconds). Concurrent callers share one refresh after expiry. Checks run concurrently against Pinecone, PostgreSQL and configured S3 storage, each with a 5-second timeout.
 
 ---
 
@@ -101,13 +97,13 @@ curl localhost:8081/health
 
 The service handles graceful shutdown when receiving `SIGINT` or `SIGTERM`:
 
-1. Stops accepting new inbound HTTP requests.
-2. Drains active HTTP requests with a 15-second deadline.
+1. Marks readiness as draining while continuing to serve requests for `SHUTDOWN_DRAIN_DELAY` (default 5 seconds). A second termination signal skips the remaining delay.
+2. Stops accepting new inbound HTTP requests and drains active requests with a 15-second deadline.
 3. Stops ingestion claims and waits up to 15 seconds for active jobs, then cancels them and releases their leases within a detached 5-second deadline. Pending jobs remain in PostgreSQL.
 4. Closes active Pinecone index client connections.
 5. Closes the PostgreSQL connection pool.
 
-Ensure container orchestrators configure a termination grace period of at least 35 seconds to allow HTTP requests, worker completion and the bounded five-second lease release to settle before sending `SIGKILL`.
+Set the termination grace period to at least `SHUTDOWN_DRAIN_DELAY + 40s` (45 seconds with the default delay) to allow traffic removal, HTTP requests, worker completion and lease release to settle before sending `SIGKILL`. No preStop hook is needed.
 
 Replicas share the PostgreSQL ingestion queue and claim jobs with renewable leases. Accepted content survives restarts. Graceful shutdown releases unfinished leases without consuming an attempt; after abrupt termination, another replica reclaims expired leases. No pending document is dropped.
 

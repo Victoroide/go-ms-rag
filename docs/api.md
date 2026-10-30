@@ -34,15 +34,23 @@ When `SERVICE_TOKEN` is configured, all mutating and sensitive endpoints require
 - `GET /documents/{doc_id}/file`
 - `DELETE /documents/{doc_id}`
 
-Requests missing or presenting an incorrect token receive `401 Unauthorized`. Header comparisons are performed in constant time using `crypto/subtle.ConstantTimeCompare`. The `GET /health` endpoint is public and does not require authentication.
+Requests missing or presenting an incorrect token receive `401 Unauthorized`. Header comparisons are performed in constant time using `crypto/subtle.ConstantTimeCompare`. The `GET /livez`, `GET /readyz` and `GET /health` endpoints are public and do not require authentication.
 
 ---
 
 ## Endpoints
 
+### GET /livez
+
+Returns HTTP 200 with `{"status":"ok"}` while the HTTP server is serving requests, including during the shutdown drain delay. It makes no dependency calls. Use this endpoint for startup and liveness checks.
+
+### GET /readyz
+
+Returns HTTP 200 with `{"status":"ready"}` when the cached PostgreSQL check succeeds. Returns HTTP 503 with `{"status":"unavailable"}` when PostgreSQL is unreachable, or `{"status":"draining"}` during shutdown. Vector index and file storage failures do not fail readiness. Use this endpoint for readiness checks.
+
 ### GET /health
 
-Returns service health status and ping probes for backing data stores.
+Returns cached diagnostic status for backing data stores. Results are shared with readiness and may be up to `HEALTH_CACHE_TTL` old (default 10 seconds). On expiry, concurrent callers share one refresh, with checks running concurrently under separate 5-second timeouts. Use this endpoint for diagnostics.
 
 - **Method**: `GET`
 - **Path**: `/health`
@@ -60,8 +68,9 @@ Response payload fields:
 |---|---|---|
 | `status` | string | `"ok"` if all dependencies respond, or `"degraded"` if any probe fails |
 | `pinecone` | string | `"ok"` or `"unreachable"` |
-| `neon` | string | `"ok"` or `"unreachable"` |
-| `s3` | string | `"ok"` or `"unreachable"` |
+| `postgres` | string | `"ok"` or `"unreachable"` |
+| `neon` | string | Deprecated alias of `postgres`, retained for compatibility |
+| `s3` | string | `"ok"` or `"unreachable"`; `"ok"` when file storage is disabled |
 
 #### Example
 

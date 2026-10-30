@@ -10,6 +10,7 @@ Notable changes are grouped by release.
 - Use the AWS default credential chain when static keys are not configured, with
   optional `AWS_SESSION_TOKEN`.
 - Multipart uploads accept a `metadata` form field.
+- `GET /livez` and `GET /readyz`, with readiness failing during a configurable shutdown drain delay.
 - JSON and multipart document ingestion with content deduplication, asynchronous
   processing and caller-supplied document identifiers.
 - Text extraction, normalization, semantic chunking and chunk quality metadata.
@@ -67,6 +68,10 @@ Notable changes are grouped by release.
 - The deletion command requires explicit document UUIDs, accepts them through
   `make cleanup IDS="<uuid> ..."`, and reuses connections across documents.
 
+### Deprecated
+
+- The `neon` field of `GET /health`; read `postgres`.
+
 ### Fixed
 
 - `GET /documents` returns an empty array instead of `null` and streams large listings.
@@ -108,6 +113,7 @@ Notable changes are grouped by release.
 ### Security
 
 - Remove invisible Unicode format characters, such as tag characters and bidirectional isolates, from ingested text.
+- Cache dependency checks behind `GET /health` so unauthenticated requests cannot multiply calls to the vector index, database or file storage.
 - Apply document allowlists and type filters inside every vector query, including
   the routing probe, and derive entity routing only from authorized candidates.
 
