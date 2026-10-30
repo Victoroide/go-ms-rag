@@ -18,8 +18,8 @@ flowchart TD
     end
 
     subgraph AsyncWorker ["Asynchronous Ingestion (internal/worker)"]
-        H_Ingest -->|"Enqueue IngestTask"| Queue["Worker Channel Queue"]
-        Queue --> WorkerLoop["Worker Goroutine"]
+        H_Ingest -->|"AcceptDocument transaction"| Queue["PostgreSQL ingest_jobs"]
+        Queue --> WorkerLoop["Lease Claim Loops"]
         WorkerLoop --> ChunkStage["ChunkStage\n(internal/chunker)"]
         ChunkStage --> EmbedStage["EmbedStage\n(internal/embedder)"]
         EmbedStage --> PersistStage["PersistStage\n(internal/pipeline)"]
@@ -34,7 +34,7 @@ flowchart TD
 
     subgraph Stores ["Data & Cloud Services"]
         PersistStage --> VectorDB[("Pinecone\nVector Store")]
-        PersistStage --> RelDB[("PostgreSQL\nMetadata & Chunks")]
+        WorkerLoop -->|"CompleteJob transaction"| RelDB[("PostgreSQL\nMetadata & Chunks")]
         H_Ingest -.->|"Upload Source File"| ObjectStore[("AWS S3\nObject Store")]
         H_File -.->|"Presign GET URL"| ObjectStore
         H_Delete --> Cleanup["Cleanup Helper"]
@@ -59,7 +59,7 @@ flowchart TD
 - **`internal/embedder`**: Invokes AWS Bedrock Titan Embed V2 to generate 1024-dimensional normalized vector embeddings, throttling concurrent API requests via weighted semaphores. Provides a deterministic fake embedder for offline execution.
 - **`internal/llm`**: Manages LLM calls to AWS Bedrock Converse, executing model selection (Nova Micro vs. Llama 4 Maverick), plain-text answer synthesis, token estimation, and JSON retry-correction routines. Provides a fake converser for offline execution.
 - **`internal/retriever`**: Executes scoped similarity searches in the default vector namespace and evaluates authorized candidate scores to select LOCAL or GLOBAL search modes.
-- **`internal/worker`**: Buffers asynchronous document ingestion tasks in an in-memory channel, executing pipeline stages in a dedicated goroutine and tracking status updates in PostgreSQL.
+- **`internal/worker`**: Claims persisted ingestion jobs with renewable leases, executes documents in parallel, and records retries or terminal status in PostgreSQL.
 - **`internal/pipeline`**: Encapsulates sequential multi-stage pipelines:
   - **Ingestion Pipeline**: Executes `ChunkStage`, `EmbedStage`, and `PersistStage`.
   - **Query Pipeline**: Executes `DecomposeStage`, `RoutingStage`, `RetrievalStage`, and `SynthesisStage`.
@@ -81,70 +81,55 @@ sequenceDiagram
     actor Caller as Client Service
     participant Handler as IngestHandler
     participant S3 as AWS S3
-    participant Queue as Worker Queue
-    participant Worker as Worker Goroutine
-    participant Pipeline as Ingestion Pipeline
-    participant Embedder as AWS Bedrock (Titan)
-    participant Pinecone as Pinecone Vector Store
-    participant Postgres as PostgreSQL Database
-
-    Caller->>Handler: POST /ingest (JSON or Multipart)
-    Note over Handler: Check Content-Type & Payload Limits
-
-    alt Multipart File Upload
-        Handler->>Handler: Detect file type & extract text
-        opt S3 configured
-            Handler->>S3: Upload raw document binary
-            S3-->>Handler: Return s3_key
-        end
+    participant Postgres as PostgreSQL
+    participant Worker as Ingestion Worker
+    participant Embedder as AWS Bedrock
+    participant Pinecone as Vector Store
+    Caller->>Handler: POST /ingest
+    Handler->>Handler: Extract, remove content NUL, validate
+    opt Source storage enabled and no duplicate for this identity
+        Handler->>S3: Upload original file
     end
-
-    Handler->>Postgres: CheckFingerprint(SHA-256)
-    alt Duplicate Found
-        Postgres-->>Handler: Existing document ID
-        Handler-->>Caller: 200 OK (already_ingested)
-    else New Content
-        Handler->>Queue: Enqueue(IngestTask)
-        alt Queue Full
-            Handler->>Caller: 503 Service Unavailable
-        else Enqueued
-            Handler-->>Caller: 202 Accepted (processing, document_id)
-        end
+    Handler->>Postgres: AcceptDocument transaction
+    Note over Postgres: Reserve identity, store content and fingerprint, insert pending job
+    alt Accepted, processing duplicate, or failed duplicate requeued
+        Handler-->>Caller: 202 processing with existing or new ID
+    else Completed duplicate
+        Handler-->>Caller: 200 already_ingested
+    else Identity conflict or queue full
+        Handler-->>Caller: 409 conflict or 503 queue
     end
-
-    Queue->>Worker: Consume IngestTask
-    Worker->>Pipeline: RunIngestionPipeline(IngestContext)
-
-    Pipeline->>Pipeline: ChunkStage (sliding window token chunks)
-
-    Pipeline->>Embedder: EmbedStage (generate chunk embeddings)
-    Embedder-->>Pipeline: Vector embeddings
-
-    Pipeline->>Pinecone: PersistStage: Upsert vectors to default namespace with doc_id metadata
-    Pipeline->>Postgres: PersistStage: Insert document record
-    Pipeline->>Postgres: PersistStage: Insert chunk records (transaction)
-    Pipeline->>Postgres: PersistStage: Store fingerprint
-
-    alt Ingestion Succeeded
-        Worker->>Postgres: UpdateDocumentStatus(completed)
-    else Ingestion Failed
-        Worker->>Postgres: UpdateDocumentStatus(failed)
+    Note over Handler,S3: Remove a new upload when acceptance does not use it
+    Worker->>Postgres: Claim ready job or expired lease
+    loop Until processing ends
+        Worker->>Postgres: Renew lease every lease / 3
     end
+    Worker->>Worker: Chunk content
+    Worker->>Embedder: Embed chunks concurrently
+    Worker->>Pinecone: Upsert default namespace
+    Worker->>Postgres: CompleteJob transaction
+    Note over Postgres: Require processing status and owned lease; insert chunks and remove job
+    alt Retryable failure
+        Worker->>Postgres: Reschedule with backoff and last_error
+    else Permanent or exhausted failure
+        Worker->>Postgres: Record failed and last_error; remove job
+        Worker->>Pinecone: Remove partial vectors
+    end
+    Note over Worker,Pinecone: Deletion clears vectors again after removing the row; late writes compensate on failed completion
 ```
 
 ### Ingestion Stages
 
 1. **ChunkStage**: Converts raw document text into sliding-window text chunks. Words are grouped into windows of `CHUNK_TOKEN_SIZE` (default 512 tokens) with an overlap of `CHUNK_OVERLAP` (default 64 tokens). Generates a deterministic chunk ID for each chunk.
-2. **EmbedStage**: Iterates over generated chunks and obtains 1024-dimensional embeddings via AWS Bedrock Titan Embed V2.
+2. **EmbedStage**: Embeds chunks concurrently up to `EMBED_CONCURRENCY`; the provider also enforces its shared request limit.
 3. **PersistStage**:
    - Assigns the caller's `doc_type` or falls back to the default `"document"`.
-   - Injects `doc_type` into metadata for both document and individual chunk records.
+   - Injects `doc_type` into individual chunk metadata; document labels are stored at acceptance.
    - Upserts vectors into Pinecone only under the default namespace (`""`), with `doc_id` metadata identifying each document.
    - Splits each vector upsert into batches of at most `PINECONE_UPSERT_BATCH_SIZE` records (default 100) and 1.5 MiB of estimated encoded data. Metadata above 40,960 serialized JSON bytes per record is rejected before writing.
    - Retries transient vector index failures with a per-attempt `PINECONE_TIMEOUT` and full-jitter exponential backoff from 200 ms, capped at 5 seconds. Writes and deletions use up to `PINECONE_MAX_ATTEMPTS` attempts; queries use at most three. Parent cancellation stops retries.
-   - Inserts the document record into PostgreSQL, storing the full text, metadata, and an initial 120-rune text preview.
-   - Inserts chunk metadata records into PostgreSQL inside a database transaction.
-   - Records the SHA-256 content fingerprint in PostgreSQL.
+4. **Transactional completion**: The worker replaces chunk metadata and marks the document completed in one transaction guarded by document status and the current lease. Document content, metadata, preview and fingerprint already exist before acceptance returns.
+
 
 ---
 
@@ -278,6 +263,7 @@ erDiagram
 
 - **`documents`**: Stores primary document records, full content, status lifecycle (`processing`, `completed`, `failed`), extracted prefix preview, file metadata, object storage references, and document labels.
 - **`chunks`**: Stores segmented text blocks and approximate token counts linked to parent documents via cascading foreign keys.
+- **`ingest_jobs`**: Stores pending or running work, attempt counts, lease ownership and expiry, retry scheduling, and the latest error. Deleting a document cascades to its job.
 - **`document_fingerprints`**: Maps SHA-256 content hashes to document UUIDs, providing deduplication across ingest requests.
 
 ---
@@ -292,7 +278,7 @@ erDiagram
 4. Storage drivers and model clients are initialized:
    - In standard mode: Pinecone index connection pools, AWS Bedrock embedder, AWS Bedrock LLM client, and S3 object storage client.
    - In offline fake mode: In-memory vector store, fake deterministic embedder, and fake converser.
-5. Ingestion pipeline stages and worker queue are instantiated, and the worker consumer goroutine is started.
+5. Ingestion stages and `INGEST_WORKERS` lease claim loops are started with a unique process owner.
 6. The HTTP router and middleware chain are registered with standard network listeners.
 7. HTTP server listener begins serving with explicit timeout parameters:
    - Header read timeout: 5 seconds
@@ -302,19 +288,19 @@ erDiagram
 
 ### Worker Queue Mechanics
 
-- The worker queue is backed by an in-memory buffered channel of capacity `WORKER_QUEUE_SIZE` (default 100).
-- Handlers enqueue incoming tasks non-blockingly using `select`. If the channel is full, the request returns HTTP 503 and drops the task. If a source file was already uploaded to S3, the handler removes the uploaded object.
-- A single worker goroutine sequentially consumes from the channel, running the ingestion pipeline and updating document statuses in PostgreSQL.
+- PostgreSQL stores accepted content and a pending job atomically before HTTP 202. `WORKER_QUEUE_SIZE` defaults to 1000 and bounds outstanding jobs across replicas, including running work.
+- Identical content without an explicit identifier selects its existing document atomically. Completed duplicates return 200; in-flight duplicates return 202; failed duplicates return 202 and requeue the original identifier. Explicit identifiers preserve caller identity and reject conflicting content with 409.
+- `INGEST_WORKERS` defaults to 2. Each loop claims due jobs with `FOR UPDATE SKIP LOCKED` and renews its lease every `INGEST_LEASE / 3`. Polling discovers persisted work even when a notification is missed or another replica accepts it.
+- Expired leases are reclaimed. Every attempt first removes existing vectors for the document. Retryable failures use exponential backoff from 5 seconds to 5 minutes plus up to 1 second of jitter. Processing failures that are permanent or exhaust attempts remove partial vectors under the live lease before recording `failed` and `last_error`. Jobs exhausted through expired leases are failed during claiming; their remaining vectors stay hidden by document status and are removed before any requeued attempt.
+- Deletion cascades to the job. Completion requires both a processing document and its owned lease; if deletion wins, the worker removes any late vectors.
 
 ### Graceful Shutdown Sequence
 
-1. The process captures OS termination signals (`SIGINT`, `SIGTERM`).
-2. An active HTTP server shutdown begins with a 15-second deadline via `http.Server.Shutdown`, stopping new connection acceptance and waiting for in-flight requests to complete.
-3. The background worker is stopped via `Worker.ShutdownContext` with a 15-second deadline:
-   - The queue channel is closed to reject any further enqueue attempts.
-   - Any tasks already buffered in the channel are processed until empty or until context cancellation.
-4. Active Pinecone index connections are closed.
-5. The PostgreSQL connection pool is closed, waiting for checked-out connections to return.
+1. The process captures `SIGINT` or `SIGTERM`.
+2. HTTP shutdown stops new connections and waits up to 15 seconds for active requests.
+3. Worker shutdown stops new claims and waits up to 15 seconds for current jobs. At the deadline it cancels processing and releases each lease under a detached 5-second context without consuming an attempt. Pending jobs remain persisted.
+4. Vector connections close after workers stop.
+5. The PostgreSQL pool closes last. A replacement replica resumes pending work; expired leases recover work after abrupt process loss.
 
 ### Extraction Boundaries
 

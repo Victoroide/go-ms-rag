@@ -14,7 +14,6 @@ import (
 
 	"github.com/Victoroide/quarry-rag/internal/chunker"
 	"github.com/Victoroide/quarry-rag/internal/domain"
-	"github.com/Victoroide/quarry-rag/internal/pipeline"
 	"github.com/Victoroide/quarry-rag/internal/worker"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -50,17 +49,6 @@ func (*identityFakeStore) UpdateDocumentStatus(context.Context, domain.DocumentI
 	return nil
 }
 
-type identityCaptureStage struct {
-	processed []domain.DocumentID
-}
-
-func (*identityCaptureStage) ID() pipeline.StageID { return pipeline.StagePersist }
-
-func (s *identityCaptureStage) Run(_ context.Context, ic *pipeline.IngestContext) error {
-	s.processed = append(s.processed, ic.DocumentID)
-	return nil
-}
-
 func identityRequest(t *testing.T, content, id string, upload bool) *http.Request {
 	t.Helper()
 	if !upload {
@@ -92,13 +80,10 @@ func identityRequest(t *testing.T, content, id string, upload bool) *http.Reques
 
 func identityServe(t *testing.T, store *identityFakeStore, id, content string, upload bool) *httptest.ResponseRecorder {
 	t.Helper()
-	w := worker.NewWorker(1, nil, store)
+	w := worker.New(nil, nil, nil, worker.Options{})
 	t.Cleanup(w.Shutdown)
 	rw := httptest.NewRecorder()
 	IngestHandler(w, store, nil, 1<<20).ServeHTTP(rw, identityRequest(t, content, id, upload))
-	if rw.Code != http.StatusAccepted {
-		require.True(t, w.Enqueue(worker.IngestTask{}), "rejected or duplicate request must not be queued")
-	}
 	return rw
 }
 
@@ -181,19 +166,36 @@ func TestMultipartDocumentIDIsHonored(t *testing.T) {
 	require.Equal(t, id, response.DocumentID)
 }
 
-func TestCallerIDIsRecheckedBeforeProcessing(t *testing.T) {
-	for _, upload := range []bool{false, true} {
-		id := domain.DocumentID(uuid.NewString())
-		store := &identityFakeStore{}
-		stage := &identityCaptureStage{}
-		w := worker.NewWorker(1, []pipeline.Stage{stage}, store)
-		t.Cleanup(w.Shutdown)
-		rw := httptest.NewRecorder()
-		IngestHandler(w, store, nil, 1<<20).ServeHTTP(rw, identityRequest(t, "Identity document", string(id), upload))
-		require.Equal(t, http.StatusAccepted, rw.Code, rw.Body.String())
-		store.documents = map[domain.DocumentID]domain.Document{id: {ID: id, Content: "Existing document"}}
-		w.Start(t.Context())
-		w.Shutdown()
-		require.Empty(t, stage.processed, "caller identity must reach the worker before any stages run")
+func (s *identityFakeStore) AcceptDocument(ctx context.Context, req domain.AcceptRequest) (domain.AcceptResult, error) {
+	result := domain.AcceptResult{DocumentID: req.Document.ID, Outcome: domain.AcceptAccepted}
+	if req.CallerSupplied {
+		doc, err := s.GetDocument(ctx, req.Document.ID)
+		if err != nil {
+			return result, err
+		}
+		if doc != nil {
+			result.Outcome = domain.AcceptDuplicate
+			if chunker.Fingerprint(doc.Content) != req.Fingerprint {
+				result.Outcome = domain.AcceptConflict
+			}
+		}
+	} else {
+		id, exists, err := s.CheckFingerprint(ctx, req.Fingerprint)
+		if err != nil {
+			return result, err
+		}
+		if exists {
+			result.DocumentID = id
+			result.Outcome = domain.AcceptDuplicate
+		}
 	}
+	return result, nil
+}
+
+func TestIngestRequiresDurableAcceptor(t *testing.T) {
+	store := struct{ domain.ChunkStore }{}
+	rec := httptest.NewRecorder()
+	IngestHandler(nil, store, nil, 1<<20)(rec, identityRequest(t, "valid content", "", false))
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.JSONEq(t, `{"error":"unavailable","message":"document store unavailable"}`, rec.Body.String())
 }

@@ -70,7 +70,8 @@ func newClient(awsCfg aws.Config, bucket, owner string, optFns ...func(*s3.Optio
 }
 
 // Upload stores a file in S3 and returns the S3 key.
-// Key structure: documents/{docType}/{docID}/{filename}
+// Upload callers provide a document ID plus a unique attempt segment.
+// Key structure: documents/{docType}/{docID}/{attemptID}/{filename}
 func (c *Client) Upload(
 	ctx context.Context,
 	docID string,

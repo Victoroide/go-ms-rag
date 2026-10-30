@@ -18,6 +18,8 @@ Notable changes are grouped by release.
 
 ### Changed
 
+- `WORKER_QUEUE_SIZE` limits pending jobs (default 1000); identical in-flight submissions return the existing identifier with 202; resubmitting the content of a failed document retries it; source file upload failures return 503.
+
 - Content deduplication applies only to requests without `document_id`;
   fingerprint lookup failures return 503.
 - `allowed_document_ids` entries must be UUIDs (at most
@@ -59,6 +61,14 @@ Notable changes are grouped by release.
 
 ### Fixed
 
+- Retain source files for caller-owned documents with identical text and after uncertain acceptance results; bound acceptance independently of caller cancellation.
+- Clear existing vectors before each ingestion attempt and again after document deletion; perform terminal cleanup under the live lease before recording failure.
+- Reject NUL characters in document labels before storage.
+
+- Persist accepted documents and their ingestion jobs in PostgreSQL before responding; jobs survive restarts, are retried with backoff under leases, and failures are recorded with `last_error`.
+- Remove NUL characters from document content and reject them in metadata before storage.
+- Embed chunks concurrently and process documents in parallel (`INGEST_WORKERS`).
+
 - Keep caller-supplied document identifiers: identical resubmissions return the
   same identifier, conflicting content returns 409, malformed identifiers return
   400, and existing documents are never overwritten.
@@ -72,8 +82,8 @@ Notable changes are grouped by release.
   retries, so documents near the 1,000,000-byte limit no longer exceed the vector
   index request limit; reuse one index connection; fall back to identifier-based
   deletion when metadata-filter deletion is rejected.
-- Wait for active requests and accepted ingestion work before closing stores;
-  repeated shutdown and concurrent enqueue no longer race channel closure.
+- Wait for active requests and current ingestion attempts before closing stores;
+  release unfinished leases at the shutdown deadline.
 - Persist failure status with a bounded independent context after cancellation.
 - Roll back failed chunk batches, refresh conflicting chunks, propagate metadata
   errors and isolate entity caches by database connection pool.

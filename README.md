@@ -4,7 +4,7 @@ Quarry (`quarry-rag`) is a domain-agnostic retrieval-augmented generation (RAG) 
 
 ## Features
 
-- **Document ingestion**: Accepts raw text via JSON or binary files (PDF, DOCX, DOC) via multipart upload, with SHA-256 fingerprint deduplication.
+- **Durable document ingestion**: Accepts text or PDF, DOCX and DOC uploads into PostgreSQL before responding, with atomic deduplication, parallel processing, leased retries and restart recovery.
 - **Adaptive retrieval**: Evaluates query complexity and similarity signals to route between LOCAL and GLOBAL vector search in Pinecone.
 - **Tenant and document filtering**: Supports metadata filtering by document type and query-time document ID allowlists enforced before synthesis.
 - **Grounded synthesis**: Generates answers in the language of the incoming question using AWS Bedrock models when evidence is available; empty results return a fixed English no-information answer without synthesis.
@@ -27,8 +27,8 @@ flowchart TD
     end
 
     subgraph AsyncWorker ["Asynchronous Ingestion (internal/worker)"]
-        H_Ingest -->|"Enqueue IngestTask"| Queue["Worker Channel Queue"]
-        Queue --> WorkerLoop["Worker Goroutine"]
+        H_Ingest -->|"AcceptDocument transaction"| Queue["PostgreSQL ingest_jobs"]
+        Queue --> WorkerLoop["Lease Claim Loops"]
         WorkerLoop --> ChunkStage["ChunkStage\n(internal/chunker)"]
         ChunkStage --> EmbedStage["EmbedStage\n(internal/embedder)"]
         EmbedStage --> PersistStage["PersistStage\n(internal/pipeline)"]
@@ -43,7 +43,7 @@ flowchart TD
 
     subgraph Stores ["Data & Cloud Services"]
         PersistStage --> VectorDB[("Pinecone\nVector Store")]
-        PersistStage --> RelDB[("PostgreSQL\nMetadata & Chunks")]
+        WorkerLoop -->|"CompleteJob transaction"| RelDB[("PostgreSQL\nMetadata & Chunks")]
         H_Ingest -.->|"Upload Source File"| ObjectStore[("AWS S3\nObject Store")]
         H_File -.->|"Presign GET URL"| ObjectStore
         H_Delete --> Cleanup["Cleanup Helper"]

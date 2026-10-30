@@ -28,6 +28,7 @@ import (
 	pgstore "github.com/Victoroide/quarry-rag/internal/store/postgres"
 	s3store "github.com/Victoroide/quarry-rag/internal/store/s3"
 	"github.com/Victoroide/quarry-rag/internal/worker"
+	"github.com/google/uuid"
 )
 
 func main() {
@@ -137,12 +138,16 @@ func run() error {
 	// Build ingestion pipeline stages.
 	ingestStages := []pipeline.Stage{
 		pipeline.NewChunkStage(chk),
-		pipeline.NewEmbedStage(emb),
-		pipeline.NewPersistStage(vectorStore, pgClient),
+		pipeline.NewEmbedStage(emb, cfg.EmbedConcurrency),
+		pipeline.NewPersistStage(vectorStore),
 	}
 
 	// Initialize worker.
-	w := worker.NewWorker(cfg.WorkerQueueSize, ingestStages, pgClient)
+	hostname, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("startup: hostname: %w", err)
+	}
+	w := worker.New(pgClient, ingestStages, vecDeleter, worker.Options{Workers: cfg.IngestWorkers, MaxAttempts: cfg.IngestMaxAttempts, Lease: cfg.IngestLease, JobTimeout: cfg.IngestJobTimeout, PollInterval: cfg.IngestPollInterval, Owner: hostname + "-" + uuid.NewString()})
 	w.Start(ctx)
 	defer func() {
 		shutdownCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)

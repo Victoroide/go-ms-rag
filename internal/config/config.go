@@ -67,6 +67,12 @@ type Config struct {
 	ExtractQueueTimeout      time.Duration
 	MaxAllowedDocumentIDs    int
 	RequireDocumentAllowlist bool
+
+	IngestWorkers      int
+	IngestMaxAttempts  int
+	IngestLease        time.Duration
+	IngestJobTimeout   time.Duration
+	IngestPollInterval time.Duration
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -94,11 +100,12 @@ func Load() (*Config, error) {
 		dst      *int
 		fallback int
 	}{
-		{"WORKER_QUEUE_SIZE", &cfg.WorkerQueueSize, 100}, {"EMBED_CONCURRENCY", &cfg.EmbedConcurrency, 10},
+		{"WORKER_QUEUE_SIZE", &cfg.WorkerQueueSize, 1000}, {"EMBED_CONCURRENCY", &cfg.EmbedConcurrency, 10},
 		{"MAX_CHUNKS_PER_QUERY", &cfg.MaxChunksPerQuery, 10}, {"CHUNK_TOKEN_SIZE", &cfg.ChunkTokenSize, 512},
 		{"CHUNK_OVERLAP", &cfg.ChunkOverlap, 64}, {"EMBEDDING_DIMENSIONS", &cfg.EmbeddingDimensions, 1024},
 		{"PINECONE_UPSERT_BATCH_SIZE", &cfg.PineconeUpsertBatchSize, 100},
 		{"PINECONE_MAX_ATTEMPTS", &cfg.PineconeMaxAttempts, 5},
+		{"INGEST_WORKERS", &cfg.IngestWorkers, 2}, {"INGEST_MAX_ATTEMPTS", &cfg.IngestMaxAttempts, 5},
 		{"EXTRACT_CONCURRENCY", &cfg.ExtractConcurrency, 2}, {"EXTRACT_MEMORY_LIMIT_MB", &cfg.ExtractMemoryLimitMB, 512},
 		{"MAX_ALLOWED_DOCUMENT_IDS", &cfg.MaxAllowedDocumentIDs, 25000},
 	} {
@@ -135,6 +142,21 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	for _, setting := range []struct {
+		key      string
+		dst      *time.Duration
+		fallback time.Duration
+	}{
+		{"INGEST_LEASE", &cfg.IngestLease, 2 * time.Minute},
+		{"INGEST_JOB_TIMEOUT", &cfg.IngestJobTimeout, 15 * time.Minute},
+		{"INGEST_POLL_INTERVAL", &cfg.IngestPollInterval, time.Second},
+	} {
+		value, parseErr := envDurationOrDefault(setting.key, setting.fallback)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		*setting.dst = value
+	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -168,8 +190,8 @@ func (c *Config) validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("config: missing required environment variables: %v", missing)
 	}
-	if c.WorkerQueueSize < 1 || c.WorkerQueueSize > 1000 {
-		return fmt.Errorf("config: WORKER_QUEUE_SIZE must be between 1 and 1000, got %d", c.WorkerQueueSize)
+	if c.WorkerQueueSize < 1 || c.WorkerQueueSize > 100000 {
+		return fmt.Errorf("config: WORKER_QUEUE_SIZE must be between 1 and 100000, got %d", c.WorkerQueueSize)
 	}
 	if c.EmbedConcurrency < 1 || c.EmbedConcurrency > 50 {
 		return fmt.Errorf("config: EMBED_CONCURRENCY must be between 1 and 50, got %d", c.EmbedConcurrency)
@@ -237,6 +259,22 @@ func (c *Config) validate() error {
 	if c.MaxAllowedDocumentIDs < 1 || c.MaxAllowedDocumentIDs > 100000 {
 		return fmt.Errorf("config: MAX_ALLOWED_DOCUMENT_IDS must be between 1 and 100000")
 	}
+	if c.IngestWorkers < 1 || c.IngestWorkers > 32 {
+		return fmt.Errorf("config: INGEST_WORKERS must be between 1 and 32")
+	}
+	if c.IngestMaxAttempts < 1 || c.IngestMaxAttempts > 20 {
+		return fmt.Errorf("config: INGEST_MAX_ATTEMPTS must be between 1 and 20")
+	}
+	if c.IngestLease < 30*time.Second || c.IngestLease > 30*time.Minute {
+		return fmt.Errorf("config: INGEST_LEASE must be between 30s and 30m")
+	}
+	if c.IngestJobTimeout < time.Minute || c.IngestJobTimeout > 2*time.Hour || c.IngestJobTimeout <= c.IngestLease {
+		return fmt.Errorf("config: INGEST_JOB_TIMEOUT must be between 1m and 2h and exceed INGEST_LEASE")
+	}
+	if c.IngestPollInterval < 100*time.Millisecond || c.IngestPollInterval > time.Minute {
+		return fmt.Errorf("config: INGEST_POLL_INTERVAL must be between 100ms and 1m")
+	}
+
 	return nil
 }
 

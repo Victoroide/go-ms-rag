@@ -57,7 +57,7 @@ curl localhost:8081/health
 
 ### POST /ingest
 
-Ingests textual content or document files for chunking, embedding generation, vector indexing, and relational storage. Supports JSON payloads and multipart file uploads.
+Ingests textual content or document files for chunking, embedding, vector indexing, and relational storage. HTTP 202 means the document content and pending ingestion job have committed to PostgreSQL and survive restarts. Processing completes asynchronously. Content NUL characters are removed before validation and fingerprinting; metadata keys or values containing NUL return 400 `metadata must not contain NUL characters`.
 
 - **Method**: `POST`
 - **Path**: `/ingest`
@@ -90,8 +90,8 @@ Response (New Document):
 Response (Duplicate Document):
 - **Status**: `200 OK`
 
-When `document_id` is supplied, an existing identifier with the same content
-fingerprint returns `already_ingested` with that same identifier. Different
+When `document_id` is supplied, a completed document with the same content
+fingerprint returns `already_ingested` with that same identifier. In-flight duplicates return 202 `processing` with the same identifier. Failed duplicates return 202 and requeue that document. Different
 content under an existing identifier returns 409 with
 `{"error":"conflict","message":"document_id already exists with different content"}`.
 Existing documents are never overwritten.
@@ -117,8 +117,8 @@ Error Status Codes:
 | `409 Conflict` | `conflict` | Supplied `document_id` already exists with different content |
 | `413 Payload Too Large` | `validation` | JSON request payload exceeds 8,097,152 bytes |
 | `415 Unsupported Media Type` | `validation` | Content-Type is not `application/json` or `multipart/form-data` |
-| `503 Service Unavailable` | `queue` | Ingest worker channel queue is full (`WORKER_QUEUE_SIZE` reached) |
-| `503 Service Unavailable` | `unavailable` | Document or fingerprint lookup failed |
+| `503 Service Unavailable` | `queue` | Persisted ingestion queue is full (`WORKER_QUEUE_SIZE` reached); `Retry-After: 30` |
+| `503 Service Unavailable` | `unavailable` | Document lookup or atomic acceptance failed |
 
 Example:
 
@@ -149,9 +149,7 @@ Form fields:
 | `doc_type` | string | no | Document category label. Defaults to `"document"` if omitted |
 | `document_id` | string | no | Optional document UUID with the same identity and conflict rules as JSON requests, applied to extracted text |
 
-New uploads return 202 with the retained or generated identifier. Identical
-resubmissions under an existing identifier return 200 `already_ingested` with
-the same identifier. Without `document_id`, uploads use content deduplication.
+New uploads return 202 after durable acceptance with the retained or generated identifier. Completed duplicates return 200 `already_ingested`; in-flight duplicates return 202 with the same identifier; failed duplicates return 202 and are requeued. Without `document_id`, uploads use content deduplication. A configured source store must accept the original upload before document acceptance. New source objects are removed when acceptance does not retain them.
 
 Error Status Codes:
 
@@ -166,8 +164,9 @@ Error Status Codes:
 | `422 Unprocessable Entity` | `extraction` | Isolated parser failure: `document could not be parsed`; extraction timeout: `document extraction exceeded the time limit` |
 | `503 Service Unavailable` | `busy` | All upload slots remain occupied beyond `EXTRACT_QUEUE_TIMEOUT`: `too many concurrent uploads`, with `Retry-After: 5` |
 | `503 Service Unavailable` | `extraction` | The extraction child cannot be started: `document extraction is unavailable` |
-| `503 Service Unavailable` | `queue` | Ingest worker channel queue is full; rolls back S3 object if uploaded |
-| `503 Service Unavailable` | `unavailable` | Document or fingerprint lookup failed |
+| `503 Service Unavailable` | `storage` | Source upload failed: `source file storage is unavailable`; `Retry-After: 30` |
+| `503 Service Unavailable` | `queue` | Persisted ingestion queue is full; removes a newly uploaded source object; `Retry-After: 30` |
+| `503 Service Unavailable` | `unavailable` | Document lookup or atomic acceptance failed |
 
 Example:
 

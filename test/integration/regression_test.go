@@ -8,10 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"unicode/utf8"
+	"time"
 
 	"github.com/Victoroide/quarry-rag/internal/api/handler"
-	"github.com/Victoroide/quarry-rag/internal/chunker"
 	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/Victoroide/quarry-rag/internal/domain"
 	"github.com/Victoroide/quarry-rag/internal/embedder"
@@ -30,20 +29,15 @@ import (
 func TestPersistOpaqueDocumentType(t *testing.T) {
 	for _, label := range []string{"", "manual", "custom/type α"} {
 		t.Run(label, func(t *testing.T) {
-			cs := newMockChunkStore()
 			vs := memory.NewFakeVectorStore()
 			ic := pipeline.NewIngestContext("doc", strings.Repeat("界", 50), nil)
 			ic.DocType = label
 			ic.Chunks = []domain.Chunk{{ID: "chunk", DocumentID: "doc", Embedding: []float32{1}}}
-			require.NoError(t, pipeline.NewPersistStage(vs, cs).Run(t.Context(), ic))
+			require.NoError(t, pipeline.NewPersistStage(vs).Run(t.Context(), ic))
 			want := label
 			if want == "" {
 				want = "document"
 			}
-			doc, err := cs.GetDocument(t.Context(), "doc")
-			require.NoError(t, err)
-			require.Equal(t, want, doc.Metadata["doc_type"])
-			require.True(t, utf8.ValidString(doc.ContentPreview))
 			chunks, err := vs.Query(t.Context(), "", []float32{1}, 10, want)
 			require.NoError(t, err)
 			require.Len(t, chunks, 1)
@@ -57,7 +51,7 @@ func TestJSONIngestRejectsWhitespaceAndTrailingJSON(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		cs := newMockChunkStore()
-		handler.IngestHandler(worker.NewWorker(1, nil, cs), cs, nil, 1024)(rec, req)
+		handler.IngestHandler(worker.New(cs, nil, nil, worker.Options{}), cs, nil, 1024)(rec, req)
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 	}
 }
@@ -67,7 +61,7 @@ func TestJSONIngestBodyLimit(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	cs := newMockChunkStore()
-	handler.IngestHandler(worker.NewWorker(1, nil, cs), cs, nil, 1024)(rec, req)
+	handler.IngestHandler(worker.New(cs, nil, nil, worker.Options{}), cs, nil, 1024)(rec, req)
 	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 }
 
@@ -147,22 +141,26 @@ func TestPostgresDocumentLifecycle(t *testing.T) {
 	require.ErrorAs(t, err, &syntaxErr)
 }
 
-func TestIngestShutdownDrainsAcceptedDocument(t *testing.T) {
-	cs := newMockChunkStore()
-	w := worker.NewWorker(10, []pipeline.Stage{pipeline.NewChunkStage(chunker.NewChunker(30, 4)), pipeline.NewEmbedStage(embedder.NewFakeEmbedder(256)), pipeline.NewPersistStage(memory.NewFakeVectorStore(), cs)}, cs)
-	w.Start(t.Context())
-	h := handler.IngestHandler(w, cs, nil, 1024)
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/ingest", strings.NewReader(`{"content":"The archive is open every weekday for document research."}`))
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	rec := httptest.NewRecorder()
-	h(rec, req)
+func TestShutdownReleasesLease(t *testing.T) {
+	c := durableDatabase(t)
+	v := memory.NewFakeVectorStore()
+	e := durableBlockingEmbedder{make(chan struct{}, 1), make(chan struct{})}
+	w := durableWorker(c, v, e)
+	rec := durableSubmit(t, w, c, `{"content":"Release the unfinished document on shutdown."}`)
 	require.Equal(t, 202, rec.Code)
-	var response handler.IngestResponse
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
-	w.Shutdown()
-	doc, err := cs.GetDocument(t.Context(), domain.DocumentID(response.DocumentID))
+	w.Start(t.Context())
+	select {
+	case <-e.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("processing did not start")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, w.ShutdownContext(ctx), context.Canceled)
+	job, err := c.ClaimJob(t.Context(), "replacement", time.Minute, 3)
 	require.NoError(t, err)
-	require.NotNil(t, doc)
+	require.NotNil(t, job)
+	require.Equal(t, 1, job.Attempts)
 }
 
 func TestQueryValidationAndAuthorization(t *testing.T) {
@@ -258,6 +256,6 @@ func TestEscapedJSONNearDecodedContentLimitIsAccepted(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/ingest", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	handler.IngestHandler(worker.NewWorker(1, nil, cs), cs, nil, 20<<20)(rec, req)
+	handler.IngestHandler(worker.New(cs, nil, nil, worker.Options{}), cs, nil, 20<<20)(rec, req)
 	require.Equal(t, 202, rec.Code, rec.Body.String())
 }
