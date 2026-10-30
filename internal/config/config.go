@@ -73,6 +73,10 @@ type Config struct {
 	IngestLease        time.Duration
 	IngestJobTimeout   time.Duration
 	IngestPollInterval time.Duration
+
+	AWSSessionToken string
+	AWSMaxAttempts  int
+	EmbedTimeout    time.Duration
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -94,6 +98,7 @@ func Load() (*Config, error) {
 		SynthesisModel:        envOrDefault("SYNTHESIS_MODEL", "fallback"),
 		ServiceToken:          os.Getenv("SERVICE_TOKEN"),
 		S3ExpectedBucketOwner: os.Getenv("S3_EXPECTED_BUCKET_OWNER"),
+		AWSSessionToken:       os.Getenv("AWS_SESSION_TOKEN"),
 	}
 	for _, setting := range []struct {
 		key      string
@@ -108,6 +113,7 @@ func Load() (*Config, error) {
 		{"INGEST_WORKERS", &cfg.IngestWorkers, 2}, {"INGEST_MAX_ATTEMPTS", &cfg.IngestMaxAttempts, 5},
 		{"EXTRACT_CONCURRENCY", &cfg.ExtractConcurrency, 2}, {"EXTRACT_MEMORY_LIMIT_MB", &cfg.ExtractMemoryLimitMB, 512},
 		{"MAX_ALLOWED_DOCUMENT_IDS", &cfg.MaxAllowedDocumentIDs, 25000},
+		{"AWS_MAX_ATTEMPTS", &cfg.AWSMaxAttempts, 4},
 	} {
 		value, err := envIntOrDefault(setting.key, setting.fallback)
 		if err != nil {
@@ -150,6 +156,7 @@ func Load() (*Config, error) {
 		{"INGEST_LEASE", &cfg.IngestLease, 2 * time.Minute},
 		{"INGEST_JOB_TIMEOUT", &cfg.IngestJobTimeout, 15 * time.Minute},
 		{"INGEST_POLL_INTERVAL", &cfg.IngestPollInterval, time.Second},
+		{"EMBED_TIMEOUT", &cfg.EmbedTimeout, 15 * time.Second},
 	} {
 		value, parseErr := envDurationOrDefault(setting.key, setting.fallback)
 		if parseErr != nil {
@@ -168,16 +175,13 @@ func (c *Config) validate() error {
 		name  string
 		value string
 	}
-	// DATABASE_URL is always required (metadata store). Cloud creds are only
-	// required in real mode; FakeMode runs without AWS/Pinecone.
+	// DATABASE_URL is always required. FakeMode runs without AWS or Pinecone.
 	required := []requirement{
 		{"DATABASE_URL", c.DatabaseURL},
 	}
 	if !c.FakeMode {
 		required = append(required,
 			requirement{"AWS_REGION", c.AWSRegion},
-			requirement{"AWS_ACCESS_KEY_ID", c.AWSAccessKeyID},
-			requirement{"AWS_SECRET_ACCESS_KEY", c.AWSSecretKey},
 			requirement{"PINECONE_API_KEY", c.PineconeAPIKey},
 		)
 	}
@@ -189,6 +193,15 @@ func (c *Config) validate() error {
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("config: missing required environment variables: %v", missing)
+	}
+	if (c.AWSAccessKeyID == "") != (c.AWSSecretKey == "") {
+		return fmt.Errorf("config: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be both set or both empty")
+	}
+	if c.AWSMaxAttempts < 1 || c.AWSMaxAttempts > 10 {
+		return fmt.Errorf("config: AWS_MAX_ATTEMPTS must be between 1 and 10")
+	}
+	if c.EmbedTimeout < time.Second || c.EmbedTimeout > 2*time.Minute {
+		return fmt.Errorf("config: EMBED_TIMEOUT must be between 1s and 2m")
 	}
 	if c.WorkerQueueSize < 1 || c.WorkerQueueSize > 100000 {
 		return fmt.Errorf("config: WORKER_QUEUE_SIZE must be between 1 and 100000, got %d", c.WorkerQueueSize)
