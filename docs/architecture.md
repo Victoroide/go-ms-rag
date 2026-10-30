@@ -287,7 +287,7 @@ erDiagram
 
 1. Configuration is loaded and validated against constraints from environment variables.
 2. The PostgreSQL connection pool (`pgxpool.Pool`) is established with a 30-second connection timeout.
-3. Embedded SQL migrations (001 through 005) are executed sequentially against PostgreSQL.
+3. Embedded SQL migrations are discovered by version and applied once in ascending order within a PostgreSQL transaction guarded by an advisory lock. The `schema_migrations` table records versions and checksums; concurrent replicas wait for the lock, and subsequent startups skip applied SQL after verifying checksums.
 4. Storage drivers and model clients are initialized:
    - In standard mode: Pinecone index connection pools, AWS Bedrock embedder, AWS Bedrock LLM client, and S3 object storage client.
    - In offline fake mode: In-memory vector store, fake deterministic embedder, and fake converser.

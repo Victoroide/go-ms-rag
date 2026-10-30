@@ -10,9 +10,9 @@ The service is packaged using a multi-stage Docker build that outputs a minimal,
 2. **`test`**: Runs static checks (`go vet ./...`) and the short suite with data race instrumentation (`go test -short ./... -count=1 -race`); Docker-backed tests run in full on the host or CI runner.
 3. **`lint`**: Compiles and executes `golangci-lint` (v2.15.0) against `.golangci.yml`.
 4. **`builder`**: Compiles the statically linked binary (`CGO_ENABLED=0 go build -o /bin/server ./cmd/server`).
-5. **`runtime`**: Builds on `alpine:3.23.4`. Installs CA certificates and timezone data, creates a dedicated system user and group (`app`, numeric UID/GID `10001:10001`), copies the compiled server binary and embedded migration SQL files, and sets the non-root user as the execution user.
+5. **`runtime`**: Builds on `alpine:3.23.4`. Installs CA certificates and timezone data, creates a dedicated system user and group (`app`, numeric UID/GID `10001:10001`), copies the compiled server binary containing the embedded migrations, and sets the non-root user as the execution user.
 
-For host verification, `make vet`, `make lint` and `make test` run directly with the local Go toolchain; the full test suite needs a Docker daemon. `make ci` runs those gates in order and then builds the runtime image. The image build's short suite skips only the two Docker-backed database tests, with an explicit daemon requirement message.
+For host verification, `make vet`, `make lint` and `make test` run directly with the local Go toolchain; the full test suite needs a Docker daemon. `make ci` runs those gates in order and then builds the runtime image. The image build's short suite skips Docker-backed database tests, with an explicit daemon requirement message.
 
 To compile the runtime image:
 
@@ -43,7 +43,7 @@ In production deployments (`GO_RAG_FAKE_MODE=false`), the microservice connects 
 - **Extensions**: `pgcrypto` (applied automatically by migration 001).
 - **Configuration**: Provided via `DATABASE_URL`.
 - **Purpose**: Stores document records, status indicators, chunk texts, token counts, and SHA-256 content fingerprints.
-- **Operations**: Startup migrations (001 to 005), duplicate fingerprint lookups, chunk insertion transactions, document status tracking, and inventory listings.
+- **Operations**: Versioned startup migrations, duplicate fingerprint lookups, chunk insertion transactions, document status tracking, and inventory listings. Replicas may start concurrently: a transaction-scoped advisory lock serializes migration checks and changes. Applied versions and checksums are recorded in `schema_migrations`; restarts with no pending changes skip the migration SQL.
 
 ### 2. Pinecone (Vector Index)
 

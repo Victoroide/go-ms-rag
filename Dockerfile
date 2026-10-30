@@ -26,7 +26,6 @@ FROM alpine:3.24.2 AS runtime
 RUN apk add --no-cache ca-certificates tzdata && addgroup -S -g 10001 app && adduser -S -u 10001 -G app app
 WORKDIR /app
 COPY --from=builder /bin/server /app/server
-COPY internal/store/postgres/migrations ./internal/store/postgres/migrations
 USER 10001:10001
 EXPOSE 8081
 ENTRYPOINT ["/app/server"]

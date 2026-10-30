@@ -18,7 +18,7 @@ The table below lists every environment variable parsed by the service:
 | `PINECONE_API_KEY` | string | `""` | Non-empty string | API key for authenticating with Pinecone vector indices. Required when `GO_RAG_FAKE_MODE=false`. |
 | `PINECONE_INDEX_NAME` | string | `"go-ms-rag"` | Non-empty string | Name of the target Pinecone index. |
 | `PINECONE_ENVIRONMENT` | string | `""` | String | Pinecone cloud environment identifier. |
-| `DATABASE_URL` | string | `""` | Valid PostgreSQL URI | PostgreSQL connection string for document metadata and chunk storage. Always required in all modes. |
+| `DATABASE_URL` | string | `""` | Valid PostgreSQL connection string | PostgreSQL connection string for document metadata and chunk storage. Always required in all modes. Defaults to 16 pooled connections and a 30-second statement timeout; override with `pool_max_conns` and `statement_timeout`. |
 | `WORKER_QUEUE_SIZE` | integer | `100` | 1 to 1000 | In-memory buffered channel capacity for the background ingestion worker. |
 | `EMBED_CONCURRENCY` | integer | `10` | 1 to 50 | Maximum number of concurrent embedding requests dispatched to AWS Bedrock. |
 | `LOCAL_RETRIEVAL_THRESHOLD` | float64 | `0.70` | 0.0 to 1.0 | Cosine similarity threshold for routing single-need queries to LOCAL retrieval mode. |
@@ -36,7 +36,11 @@ The table below lists every environment variable parsed by the service:
 
 ## Schema Migrations
 
-Database schema migrations are written in SQL, embedded directly into the Go binary at compile time via `//go:embed`, and applied sequentially on startup by `internal/store/postgres/client.go`. Migrations are idempotent and run inside transaction boundaries or guard blocks.
+Database schema migrations are SQL files named with a three-digit version and a descriptive suffix, such as `006_add_index.sql`. Every file under `internal/store/postgres/migrations` matching `NNN_name.sql` is embedded in the binary automatically. Versions must be unique and are applied in ascending order by `internal/store/postgres/migrate.go`.
+
+On startup, the runner acquires a PostgreSQL transaction-scoped advisory lock and applies missing versions in one transaction. The `schema_migrations` table records each version, filename, SHA-256 checksum and application timestamp. Concurrent replicas wait for the lock before checking this table. Subsequent startups verify checksums and skip applied SQL, avoiding table locks on document data when no migration is pending. Never edit an applied migration; add a new numbered file instead. A checksum mismatch stops startup. Existing databases without migration history apply the original idempotent files once and record them without removing stored documents.
+
+Application connections default to `pool_max_conns=16` and `statement_timeout=30000` (milliseconds). Explicit settings in `DATABASE_URL` override these defaults, including `statement_timeout=0` to disable the timeout. Both URI query parameters and keyword connection strings are supported; for example, `host=localhost dbname=rag pool_max_conns=24 statement_timeout=10000` sets 24 connections and a 10-second statement timeout. The migration transaction disables statement and lock timeouts while waiting for the advisory lock, then uses a 15-second lock timeout when applying SQL. Transaction-local settings do not change application connection settings after commit or rollback.
 
 | File | Description |
 |---|---|
