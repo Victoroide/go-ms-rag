@@ -69,6 +69,7 @@ type QueryContext struct {
 	// Populated by routing stage.
 	NamedEntity      string
 	EntityDocumentID string
+	LocalDocumentID  string
 	Candidates       []domain.ScoredChunk
 	SkipRetrieval    bool
 
