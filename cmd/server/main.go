@@ -50,6 +50,9 @@ func run() error {
 		return fmt.Errorf("startup: configuration error: %w", err)
 	}
 	slog.SetDefault(slog.New(logctx.NewHandler(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))))
+	for _, warning := range cfg.Warnings {
+		slog.Warn(warning)
+	}
 	logger := slog.Default()
 	startupCtx, startupCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer startupCancel()
