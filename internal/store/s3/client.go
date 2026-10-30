@@ -15,12 +15,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Victoroide/quarry-rag/internal/awsconf"
 	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/Victoroide/quarry-rag/internal/extractor"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -37,16 +36,7 @@ var ErrBucketUnavailable = errors.New("s3: bucket unavailable")
 
 // New creates a new S3 client from the service configuration.
 func New(ctx context.Context, cfg *config.Config) (*Client, error) {
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(cfg.AWSRegion),
-		awsconfig.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider(
-				cfg.AWSAccessKeyID,
-				cfg.AWSSecretKey,
-				"",
-			),
-		),
-	)
+	awsCfg, err := awsconf.Load(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("s3: load aws config: %w", err)
 	}

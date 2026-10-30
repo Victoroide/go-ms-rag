@@ -26,6 +26,7 @@ func baseValidConfig() *Config {
 		PineconeMaxAttempts:     5,
 		ExtractIsolation:        true, ExtractTimeout: 30 * time.Second, ExtractConcurrency: 2, ExtractMemoryLimitMB: 512, ExtractQueueTimeout: 5 * time.Second,
 		MaxAllowedDocumentIDs: 25000,
+		AWSMaxAttempts:        4, EmbedTimeout: 15 * time.Second,
 	}
 }
 

@@ -6,10 +6,9 @@ import (
 	"math"
 	"strings"
 
+	"github.com/Victoroide/quarry-rag/internal/awsconf"
 	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	brtypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
@@ -39,16 +38,7 @@ type Client struct {
 
 // NewClient creates a Bedrock client from the service configuration.
 func NewClient(ctx context.Context, cfg *config.Config) (*Client, error) {
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(cfg.AWSRegion),
-		awsconfig.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider(
-				cfg.AWSAccessKeyID,
-				cfg.AWSSecretKey,
-				"",
-			),
-		),
-	)
+	awsCfg, err := awsconf.Load(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("llm: load aws config: %w", err)
 	}

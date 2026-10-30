@@ -4,13 +4,15 @@ package embedder
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
+	"log/slog"
+	"math"
+	"time"
 
+	"github.com/Victoroide/quarry-rag/internal/awsconf"
 	"github.com/Victoroide/quarry-rag/internal/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"golang.org/x/sync/semaphore"
 )
@@ -27,6 +29,9 @@ type titanEmbedResponse struct {
 	Embedding []float32 `json:"embedding"`
 }
 
+// ErrInvalidEmbedding indicates an embedding with invalid dimensions or values.
+var ErrInvalidEmbedding = errors.New("embedder: invalid embedding")
+
 // BedrockEmbedder generates vector embeddings using AWS Bedrock Titan
 // Embeddings V2 with bounded concurrency via semaphore.
 type BedrockEmbedder struct {
@@ -34,20 +39,12 @@ type BedrockEmbedder struct {
 	modelID    string
 	dimensions int
 	sem        *semaphore.Weighted
+	timeout    time.Duration
 }
 
 // NewBedrockEmbedder creates an embedder from the service configuration.
 func NewBedrockEmbedder(ctx context.Context, cfg *config.Config) (*BedrockEmbedder, error) {
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(cfg.AWSRegion),
-		awsconfig.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider(
-				cfg.AWSAccessKeyID,
-				cfg.AWSSecretKey,
-				"",
-			),
-		),
-	)
+	awsCfg, err := awsconf.Load(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("embedder: load aws config: %w", err)
 	}
@@ -57,6 +54,7 @@ func NewBedrockEmbedder(ctx context.Context, cfg *config.Config) (*BedrockEmbedd
 		modelID:    cfg.BedrockEmbedModel,
 		dimensions: cfg.EmbeddingDimensions,
 		sem:        semaphore.NewWeighted(int64(cfg.EmbedConcurrency)),
+		timeout:    cfg.EmbedTimeout,
 	}, nil
 }
 
@@ -67,6 +65,9 @@ func (e *BedrockEmbedder) Embed(ctx context.Context, text string) ([]float32, er
 		return nil, fmt.Errorf("embedder: acquire semaphore: %w", err)
 	}
 	defer e.sem.Release(1)
+	// The timeout bounds the model call, not the wait for a concurrency slot.
+	ctx, cancel := context.WithTimeout(ctx, e.timeout)
+	defer cancel()
 	return e.embedSingle(ctx, text)
 }
 
@@ -97,6 +98,14 @@ func (e *BedrockEmbedder) embedSingle(ctx context.Context, text string) ([]float
 	if err := json.Unmarshal(out.Body, &resp); err != nil {
 		return nil, fmt.Errorf("embedder: unmarshal response: %w", err)
 	}
-	log.Printf("embedder: generated %d-dim embedding for %d chars", len(resp.Embedding), len(text))
+	if len(resp.Embedding) != e.dimensions {
+		return nil, fmt.Errorf("%w: got %d dimensions, want %d", ErrInvalidEmbedding, len(resp.Embedding), e.dimensions)
+	}
+	for _, value := range resp.Embedding {
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			return nil, fmt.Errorf("%w: non-finite value", ErrInvalidEmbedding)
+		}
+	}
+	slog.DebugContext(ctx, "generated embedding", "dimensions", len(resp.Embedding), "characters", len(text))
 	return resp.Embedding, nil
 }
