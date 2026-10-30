@@ -1,5 +1,22 @@
 # Deployment
 
+## Logging
+
+The service emits JSON logs to stderr. `LOG_LEVEL` sets the minimum severity:
+`debug`, `info` (default), `warn` or `error`. Each access log includes `method`,
+`path`, `status`, `bytes`, `duration_ms`, `remote_addr` and `request_id`. The path
+excludes the query string; the remote address is the connecting peer, including
+its port. `bytes` counts response body bytes written, and `duration_ms` measures
+elapsed request handling time in milliseconds.
+
+The `X-Request-ID` response header carries the correlation value. Structured logs
+written with the request context include it as `request_id`; startup and other
+logs without that context omit it. Recovered panics are logged at error severity
+with a stack trace. Panics before a response starts produce a JSON 500 and an
+access log with status 500. If headers or a partial body were already sent,
+recovery preserves that response and the access log records its original status.
+Aborted handlers propagate to the HTTP server without a recovered panic error.
+
 ## Container Image
 
 The service is packaged using a multi-stage Docker build that outputs a minimal, non-root runtime container based on Alpine Linux.

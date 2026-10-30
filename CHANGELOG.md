@@ -6,6 +6,7 @@ Notable changes are grouped by release.
 
 ### Added
 
+- Requests carry an `X-Request-ID`, accepted from callers or generated, that appears in structured access and panic logs; `LOG_LEVEL` sets verbosity.
 - `SERVICE_TOKENS` accepts several comma-separated tokens for rotation without downtime; tokens are trimmed and compared by digest in constant time.
 - `GET /documents/{doc_id}` reports ingestion status, timestamps and the last error; `GET /documents` accepts `limit` and `after` and reports `status`, `chunk_count` and `created_at`.
 - Use the AWS default credential chain when static keys are not configured, with
@@ -80,6 +81,7 @@ Notable changes are grouped by release.
 ### Fixed
 
 - DOCX extraction keeps text around text boxes, avoids duplicated alternate content, supports strict Open XML and includes footnotes and endnotes.
+- Panicking requests appear in the access log with status 500 when no response has started; aborted handlers are not reported as errors.
 - Bound chunks by estimated tokens and 30,000 bytes, splitting unspaced scripts, long tokens and long sentences; stop emitting chunks that repeat only the previous chunk's overlap.
 - Require `CHUNK_TOKEN_SIZE` to be at least 2, the minimum estimate for a non-dense character.
 - Bound each query by `QUERY_TIMEOUT` and its synthesis call by `SYNTHESIS_TIMEOUT`, limit concurrent queries, and retry upstream calls in a single layer.

@@ -24,6 +24,15 @@ nested object or array levels counting the root object as level one. Keys and
 string values must contain no NUL characters. Arbitrary metadata keys are
 accepted; they do not become vector search filters.
 
+## Request IDs
+
+Send an optional `X-Request-ID` header to correlate a request with its logs. The
+service accepts 1 to 128 ASCII letters, digits, periods, underscores, colons or
+hyphens (`^[A-Za-z0-9._:-]{1,128}$`). Missing or invalid values are replaced with
+a generated UUIDv7. Every response echoes the accepted or generated value in
+`X-Request-ID`, including authentication errors and probe responses. Access logs
+and recovered panic logs include the same value as `request_id`.
+
 ## Authentication
 
 When `SERVICE_TOKEN` or `SERVICE_TOKENS` is configured, all mutating and sensitive endpoints require the `X-Service-Token` HTTP header matching any configured token:

@@ -9,6 +9,7 @@ The table below lists every environment variable parsed by the service:
 | Variable | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `SERVER_PORT` | string | `"8081"` | 1 to 65535 | TCP port on which the HTTP server listens. |
+| `LOG_LEVEL` | string | `info` | `debug`, `info`, `warn`, `error` (case-insensitive, trimmed) | Minimum severity emitted to stderr as JSON. Access logs use info; recovered panics use error. |
 | `SHUTDOWN_DRAIN_DELAY` | duration | `5s` | 0s to 60s | Delay after readiness starts returning draining, before HTTP shutdown. A second termination signal skips the remaining delay. |
 | `HEALTH_CACHE_TTL` | duration | `10s` | 1s to 5m | Lifetime of the dependency snapshot shared by diagnostics and readiness. Concurrent requests share one refresh; failures are cached too. |
 | `AWS_REGION` | string | `""` | Valid AWS region identifier | AWS region used for AWS Bedrock API calls and S3 object storage. Required when `GO_RAG_FAKE_MODE=false`. |
